@@ -593,11 +593,13 @@ class TestAgentBot(AgentBotTestBase):
             device_id: str,
             wait_for_work: object,
             wake_semantic_dispatch: object,
+            wait_for_delivery_projection: object,
             before_admission: object,
             after_admission: object,
             schedule_trigger_sender_is_managed: object,
         ) -> None:
             assert before_admission == bot._before_ingestion_admission
+            assert wait_for_delivery_projection == bot._wait_for_delivery_projection
             assert after_admission == bot._after_ingestion_admission
             assert schedule_trigger_sender_is_managed == bot._ingress_validator.sender_is_trusted_for_ingress_metadata
             pump_calls.append(

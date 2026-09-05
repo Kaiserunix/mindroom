@@ -384,6 +384,92 @@ class TestEventKinds:
 class TestAdmissionAdapter:
     """The translation from a nio event to a durable row."""
 
+    @pytest.mark.parametrize("kind", [EventKind.REACTION, EventKind.REDACTION])
+    @pytest.mark.parametrize(
+        "provenance",
+        [nio.TimelineEventProvenance.LIVE, nio.TimelineEventProvenance.RECOVERED],
+    )
+    async def test_media_extensions_do_not_change_a_non_message_event_kind(
+        self,
+        kind: EventKind,
+        provenance: nio.TimelineEventProvenance,
+    ) -> None:
+        """Extension fields cannot turn a reaction or redaction into an image."""
+        event = (
+            reaction_event("$extended", target="$target")
+            if kind is EventKind.REACTION
+            else redaction_event("$extended", "$target")
+        )
+        event.source["content"].update(
+            {"msgtype": "m.image", "body": "extension.png", "url": "mxc://example.org/extension"},
+        )
+
+        views = ingestion_timeline_views(
+            room_id=ROOM,
+            source=event.source,
+            self_sender=BOT,
+            provenance=provenance,
+        )
+
+        assert views is not None
+        inbound, projection = views
+        assert inbound.kind is kind
+        assert inbound.event_class is EventClass.ACTIONABLE
+        if kind is EventKind.REACTION:
+            assert projection is None
+        else:
+            assert projection is not None
+            assert projection.redacts_event_id == "$target"
+
+    @pytest.mark.parametrize("kind", [EventKind.REACTION, EventKind.REDACTION])
+    async def test_valid_non_message_ingress_has_no_message_validation_warning(
+        self,
+        kind: EventKind,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Valid event content is validated against its own Matrix event type."""
+        event = (
+            reaction_event("$valid", target="$target")
+            if kind is EventKind.REACTION
+            else redaction_event("$valid", "$target")
+        )
+        with caplog.at_level("WARNING", logger="nio.events.misc"):
+            views = ingestion_timeline_views(
+                room_id=ROOM,
+                source=event.source,
+                self_sender=BOT,
+                provenance=nio.TimelineEventProvenance.RECOVERED,
+            )
+
+        assert views is not None
+        assert views[0].kind is kind
+        assert not any("Error validating event" in record.getMessage() for record in caplog.records)
+
+    @pytest.mark.parametrize("encrypted", [False, True])
+    async def test_malformed_media_ingress_retains_validation_failure(
+        self,
+        encrypted: bool,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The media parser choice cannot admit a missing attachment URL."""
+        source = image_event("$invalid", encrypted=encrypted).source
+        if encrypted:
+            source["content"]["file"] = {}
+        else:
+            del source["content"]["url"]
+        with (
+            caplog.at_level("WARNING", logger="nio.events.misc"),
+            pytest.raises(TypeError, match="Unsupported ingestion event"),
+        ):
+            ingestion_timeline_views(
+                room_id=ROOM,
+                source=source,
+                self_sender=BOT,
+                provenance=nio.TimelineEventProvenance.RECOVERED,
+            )
+
+        assert any("'url' is a required property" in record.getMessage() for record in caplog.records)
+
     async def test_a_threaded_message_lands_in_its_thread(self) -> None:
         """A threaded message lands in its thread."""
         inbound = inbound_event(
@@ -1099,10 +1185,15 @@ class TestReplayFidelity:
     ) -> None:
         """Without the key material the reference is a file nobody can open."""
         original = image_event("$sealed", "sealed.png", encrypted=True)
-        await alice.admit(
-            inbound_event(ROOM, original, EventKind.MEDIA, EventClass.ACTIONABLE),
-            projected_event(ROOM, original, EventKind.MEDIA, self_sender=BOT),
+        views = ingestion_timeline_views(
+            room_id=ROOM,
+            source=original.source,
+            self_sender=BOT,
+            provenance=nio.TimelineEventProvenance.RECOVERED,
         )
+        assert views is not None
+        assert views[0].kind is EventKind.MEDIA
+        await alice.admit(*views)
 
         replayed = parse_journal_event((await alice.pending())[0])
 

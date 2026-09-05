@@ -358,6 +358,7 @@ class AgentBot:
     _deferred_stop_phase: DeferredStopPhase | None
     _matrix_ingestion_quiesce_requested: bool
     _delivery_recovery_wake: asyncio.Event
+    _delivery_projection_progress: asyncio.Event
     _delivery_recovery_task: asyncio.Task[None] | None
     _ingestion_session: _OwnedIngestionSession | None
 
@@ -444,6 +445,7 @@ class AgentBot:
         self._deferred_stop_phase = None
         self._matrix_ingestion_quiesce_requested = False
         self._delivery_recovery_wake = asyncio.Event()
+        self._delivery_projection_progress = asyncio.Event()
         self._delivery_recovery_task = None
         self._ingestion_session = None
         self._hook_registry_state = HookRegistryState(HookRegistry.empty())
@@ -1531,6 +1533,18 @@ class AgentBot:
             context=Context(),
         )
 
+    async def _wait_for_delivery_projection(self) -> None:
+        """Retry admission after one outbox pass, preserving unrelated backoff."""
+        if self._sync_shutting_down:
+            raise asyncio.CancelledError
+        task = self._delivery_recovery_task
+        if task is None or task.done():
+            self._schedule_delivery_recovery()
+        await self._delivery_projection_progress.wait()
+        self._delivery_projection_progress.clear()
+        if self._sync_shutting_down:
+            raise asyncio.CancelledError
+
     async def _run_scheduled_delivery_recovery(self) -> None:
         """Recover outbox debt without making Matrix receive progress wait."""
         retry_delay = _DELIVERY_RECOVERY_RETRY_INITIAL_DELAY_SECONDS
@@ -1538,6 +1552,7 @@ class AgentBot:
             while not self._sync_shutting_down:
                 self._delivery_recovery_wake.clear()
                 complete = await self._recover_unacknowledged_matrix_deliveries()
+                self._delivery_projection_progress.set()
                 if complete:
                     retry_delay = _DELIVERY_RECOVERY_RETRY_INITIAL_DELAY_SECONDS
                     if not self._delivery_recovery_wake.is_set():
@@ -1553,6 +1568,7 @@ class AgentBot:
                         _DELIVERY_RECOVERY_RETRY_MAX_DELAY_SECONDS,
                     )
         finally:
+            self._delivery_projection_progress.set()
             if self._delivery_recovery_task is asyncio.current_task():
                 self._delivery_recovery_task = None
 
@@ -1666,7 +1682,7 @@ class AgentBot:
             return
 
         client.add_to_device_callback(
-            _create_best_effort_task_wrapper(  # ty: ignore[invalid-argument-type]  # matrix-nio callback types are too strict here
+            _create_best_effort_task_wrapper(
                 call_manager.on_to_device_event,
                 owner=self._runtime_view,
             ),
@@ -2370,6 +2386,7 @@ class AgentBot:
                 device_id=device_id,
                 wait_for_work=session._wait_for_work,
                 wake_semantic_dispatch=self._journal_dispatcher.wake,
+                wait_for_delivery_projection=self._wait_for_delivery_projection,
                 before_admission=self._before_ingestion_admission,
                 after_admission=self._after_ingestion_admission,
                 schedule_trigger_sender_is_managed=self._ingress_validator.sender_is_trusted_for_ingress_metadata,

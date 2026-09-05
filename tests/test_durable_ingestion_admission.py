@@ -1045,6 +1045,19 @@ def _complete_record_cases() -> tuple[
             DepartureSource.REPORTED,
         ),
         (
+            _record_with(
+                RecordKind.ROOM_LIFECYCLE,
+                {**timeline_lifecycle, "timeline_provenance": "recovered"},
+                room_id=ROOM_ID,
+                membership_epoch=1,
+                room_sequence=1,
+            ),
+            IngestionRecordDisposition.ROOM_LIFECYCLE,
+            None,
+            None,
+            DepartureSource.REPORTED,
+        ),
+        (
             local_record,
             IngestionRecordDisposition.ROOM_LIFECYCLE,
             None,
@@ -1096,6 +1109,7 @@ def _complete_record_cases() -> tuple[
         "reported-lifecycle",
         "initial-reported-lifecycle",
         "timeline-reported-lifecycle",
+        "recovered-timeline-reported-lifecycle",
         "local-lifecycle",
         "state",
         "ephemeral",
@@ -3669,7 +3683,6 @@ async def test_adapter_invalid_matrix_never_admits_or_acks(
         pytest.param("state", "$member", "source-record", "live", id="state-provenance"),
         pytest.param("timeline", "$member", None, "live", id="timeline-without-record"),
         pytest.param("timeline", "$member", "source-record", None, id="timeline-without-provenance"),
-        pytest.param("timeline", "$member", "source-record", "recovered", id="timeline-recovered"),
     ),
 )
 async def test_adapter_rejects_impossible_lifecycle_source_evidence_before_admission(

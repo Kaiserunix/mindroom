@@ -169,7 +169,7 @@ def _create_credential_client(
         user_id,
         store_path=None,
         config=matrix_client_config(http_headers=http_headers),
-        ssl=maybe_ssl_context(homeserver, runtime_paths=runtime_paths),  # ty: ignore[invalid-argument-type]
+        ssl=maybe_ssl_context(homeserver, runtime_paths=runtime_paths),
     )
 
 
@@ -301,7 +301,7 @@ async def open_owned_matrix_session(
             device_id=credentials.device_id,
             store_path=str(store_path),
             config=client_config,
-            ssl=maybe_ssl_context(homeserver, runtime_paths=runtime_paths),  # ty: ignore[invalid-argument-type]
+            ssl=maybe_ssl_context(homeserver, runtime_paths=runtime_paths),
         )
         client.user_id = credentials.user_id
         client.device_id = credentials.device_id

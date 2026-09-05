@@ -28,6 +28,13 @@ One shared boundary helper encodes `None` to the empty string and decodes it bac
 Admission performs the journal insert or deduplication, membership-epoch validation, and the projection update in one transaction.
 The admission callback returns to nio only after that transaction commits, so a crash in the gap redelivers the event rather than losing it.
 
+If an interactive source reaches admission before an attempted outgoing edit has a durable projection, `DeliveryProjectionPendingError` rolls back admission and leaves the Nio batch unacknowledged.
+The ingestion pump waits for progress from the bot's existing outbox recovery worker, then retries that same batch against the authoritative projection barrier.
+One bot-owned event signals each recovery pass; the sole pump consumes it without resetting an active worker's retry backoff.
+Waiting for the entire outbox to empty is deliberately excluded: an unrelated failed send must not block an already-projectable source.
+Pump cancellation does not cancel the independently owned recovery worker; shutdown wakes the waiter and stops admission.
+Other admission errors propagate normally.
+
 Context-only payloads may be compacted after projection; actionable payloads retain the exact replay input until terminal settlement.
 
 A pending worker processes committed events in durable receipt order and leaves an event pending on cancellation or failure.
@@ -134,7 +141,15 @@ The generic projection was not widened for either.
 
 ### 11. Recovery classification stays in nio — scoped to the timeline
 
+Owned Classic ingestion recovers limited intervals for previously joined, hydrated rooms through Nio's normal journal and crypto path.
+MindRoom accepts its recovered lifecycle provenance and messages through the existing admission path, preserving LIVE-only reply grants.
+Context hydration remains non-actionable; it does not own another history-to-action queue.
+Nio's tracked `docs/design/classic-gap-recovery-and-capacity.md` defines the recovery bounds, restart behavior, and deliberate exclusions.
+
 Timeline ingress maps nio provenance directly, with no local inference.
+It uses the specialized media parser only for encrypted media messages; every other source uses Nio's outer-event-type parser.
+Media-shaped extension fields on reactions or redactions cannot change their journal kind or create a message projection.
+Encrypted attachment fields and malformed-media rejection retain their existing validation path.
 `bot.py` asks `timeline_member_event_class(event)` for timeline member events and admits with the class nio gave; when that returns `None` the event is **skipped rather than guessed at**, because nio saying nothing means the event is already journaled with its true class.
 
 **State-block member events cannot consume provenance, because none exists** — `RoomInfo.state` carries no `TimelineEventProvenance`, and `record_completed_timeline_event` is called only from the timeline walk.

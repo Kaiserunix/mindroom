@@ -276,7 +276,7 @@ def _lifecycle_admission(
                         source_kind == "timeline"
                         and type(source_record_id) is str
                         and bool(source_record_id)
-                        and timeline_provenance in {"history", "live"}
+                        and timeline_provenance in {"history", "live", "recovered"}
                     )
                 )
             )
@@ -471,6 +471,7 @@ async def run_ingestion_pump(
     device_id: str,
     wait_for_work: Callable[[], Awaitable[None]],
     wake_semantic_dispatch: Callable[[], None],
+    wait_for_delivery_projection: Callable[[], Awaitable[None]] | None = None,
     before_admission: Callable[[ej.IngestionBatchAdmission], None] | None = None,
     after_admission: Callable[
         [ej.IngestionBatchAdmission, ej.AdmissionFacts, ingest.TimelineEventProvenance | None],
@@ -482,15 +483,21 @@ async def run_ingestion_pump(
     """Drain one-record batches until cancellation, waiting without polling."""
     while True:
         await asyncio.sleep(0)
-        facts = await consume_one_ingestion_batch(
-            session,
-            admission,
-            account_id=account_id,
-            device_id=device_id,
-            before_admission=before_admission,
-            after_admission=after_admission,
-            schedule_trigger_sender_is_managed=schedule_trigger_sender_is_managed,
-        )
+        try:
+            facts = await consume_one_ingestion_batch(
+                session,
+                admission,
+                account_id=account_id,
+                device_id=device_id,
+                before_admission=before_admission,
+                after_admission=after_admission,
+                schedule_trigger_sender_is_managed=schedule_trigger_sender_is_managed,
+            )
+        except ej.DeliveryProjectionPendingError:
+            if wait_for_delivery_projection is None:
+                raise
+            await wait_for_delivery_projection()
+            continue
         if facts is None:
             await wait_for_work()
         elif facts.semantic_event_new:

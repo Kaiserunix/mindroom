@@ -26,6 +26,7 @@ from mindroom.logging_config import get_logger
 from mindroom.matrix.event_types import CALL_MEMBER_EVENT_TYPE, RTC_NOTIFICATION_EVENT_TYPE
 from mindroom.matrix.media import (
     MATRIX_MEDIA_EVENT_TYPES,
+    is_encrypted_media_event_source,
     parse_matrix_media_event_source,
 )
 from mindroom.matrix.transport_progress import is_transport_progress_revision
@@ -259,7 +260,7 @@ def ingestion_timeline_views(
 ) -> tuple[InboundEvent, ProjectedEvent | None] | None:
     """Classify one durable timeline input, or return its compatibility fate."""
     message = "Unsupported ingestion event"
-    parsed = parse_matrix_media_event_source(source)
+    parsed = parse_matrix_media_event_source(source) if is_encrypted_media_event_source(source) else None
     if not isinstance(parsed, MATRIX_MEDIA_EVENT_TYPES):
         parsed = nio.Event.parse_event(dict(source))
     if not isinstance(parsed, nio.Event):
