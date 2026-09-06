@@ -1542,37 +1542,51 @@ async def test_watchdog_defers_to_shared_cache_write_progress(monkeypatch: pytes
 async def test_watchdog_defers_while_owned_ingestion_commits_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A blocked Frame may drain Work longer than the ordinary sync timeout."""
+    """Committed batches may keep ingestion alive beyond the ordinary sync timeout."""
     bot = _FakeBot(MINDROOM_MATRIX_SYNC_CACHE_WRITE_GRACE_SECONDS="1")
-    progress_finished = asyncio.Event()
+    bot._durable_ingestion_progress_generation = 0
+    now = 100.0
+    generations = iter(range(1, 11))
 
-    async def sync_with_durable_progress() -> None:
-        bot.sync_calls += 1
-        bot._last_sync_monotonic = time.monotonic()
-        bot._durable_ingestion_progress_generation = 0
-        try:
-            for generation in range(1, 11):
-                await asyncio.sleep(0.01)
-                bot._durable_ingestion_progress_generation = generation
-        except asyncio.CancelledError:
-            bot.first_call_cancelled = True
-            raise
-        progress_finished.set()
-        bot.running = False
+    async def commit_before_watchdog_poll(_delay: float) -> None:
+        nonlocal now
+        generation = next(generations, None)
+        if generation is None:
+            bot.running = False
+            return
+        now = 100.0 + generation / 100
+        bot._durable_ingestion_progress_generation = generation
 
-    bot.sync_forever = sync_with_durable_progress
+    monkeypatch.setattr(bot, "seconds_since_last_sync_activity", lambda: now - 100.0)
+    monkeypatch.setattr(runtime_helpers, "time", SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(
+        runtime_helpers,
+        "mark_matrix_ingestion_progress",
+        lambda name: mark_matrix_ingestion_progress(name, now_monotonic=now),
+    )
     monkeypatch.setattr(runtime_helpers, "MATRIX_SYNC_WATCHDOG_TIMEOUT_SECONDS", 0.02)
-    monkeypatch.setattr(runtime_helpers, "_MATRIX_SYNC_WATCHDOG_POLL_INTERVAL_SECONDS", 0.005)
 
     reset_matrix_sync_health()
+    sync_task = asyncio.create_task(bot.sync_forever())
+    watchdog_cancelled_sync = asyncio.Event()
     try:
-        await sync_forever_with_restart(bot, max_retries=1)
+        await asyncio.sleep(0)
+        monkeypatch.setattr(runtime_helpers.asyncio, "sleep", commit_before_watchdog_poll)
+        await _SyncIteration._watch(bot, sync_task, watchdog_cancelled_sync)
+        progress = runtime_helpers.get_matrix_ingestion_progress(bot.agent_name)
+        assert progress is not None
+        assert progress.started_monotonic == 100.01
+        assert progress.advanced_monotonic == 100.10
+        assert bot.seconds_since_last_sync_activity() == pytest.approx(0.1)
+        assert not watchdog_cancelled_sync.is_set()
+        assert not sync_task.done()
+        assert not sync_task.cancelling()
+        assert bot.first_call_cancelled is False
+        assert bot.sync_calls == 1
     finally:
+        sync_task.cancel()
+        await asyncio.gather(sync_task, return_exceptions=True)
         reset_matrix_sync_health()
-
-    assert progress_finished.is_set()
-    assert bot.first_call_cancelled is False
-    assert bot.sync_calls == 1
 
 
 @pytest.mark.asyncio

@@ -379,3 +379,39 @@ wheel hashes are retained in the persistent capacity workspace at
 contract are Git-tracked in Nio. Prior performance measurements retain their
 original source IDs; this correctness follow-up does not claim a fresh capacity
 qualification, performance improvement or 1,000-reply result.
+
+## Recipient and recovery invalidation follow-up
+
+Producer `76e4fa4bf441430227205671bb48448477d2a38c` fixes the two blockers
+reported at `785c835` with five added production lines across two existing owners.
+Refreshing the recipient list retires the outbound Megolm session when the set
+changes or its prior value is unknown; unchanged users retain their session.
+Sliding recovery that loses a joined room's baseline requests fresh initial
+state after the retained interval drains. Future LIVE delivery resumes while
+the lost interval remains fenced. No schema, queue or public API is added.
+
+Producer verification: 885 passed, three skipped, zero mypy errors across 60
+source files and all hooks passed. Six regression cases exercise actual HTTP,
+old-key decryption rejection, another room's continued recovery and retained
+output restart. The complete Nio PR remains 1,245 production lines smaller than
+main `5b6de3bc` (+5,226/-6,471). MindRoom's exact pin and lock select the fixed
+wheel; all 60 installed source files match that production commit.
+
+The broader consumer check also exposed a timing-sensitive watchdog fixture:
+10 ms producer sleeps competed with a 20 ms watchdog deadline under parallel
+load. Its fake bot never invokes Nio. The test now controls poll ticks and the
+watchdog's clock while exercising real progress/grace handling; no production
+timeout or runtime behavior changes. The original failure and isolated passing
+control are retained with the qualification evidence.
+
+Final consumer verification under the same automatic worker count passes 337
+tests with one skipped in 7.78 seconds; all repository hooks pass. A subprocess
+mutation disabling watchdog generation observation makes the corrected test
+fail, confirming that it still detects the behavior it is intended to protect.
+Consumer production source is unchanged.
+
+Reproduction commands, red/green logs and wheel hashes live in the persistent
+capacity workspace at `durable-sync-kernel/review-invalidation-20260906`.
+The Nio contract and implementation plan retain the ownership decisions.
+Previous performance measurements retain their exact original source IDs;
+this follow-up adds no fresh capacity, speed or 1,000-reply claim.

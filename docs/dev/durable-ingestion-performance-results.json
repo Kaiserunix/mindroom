@@ -314,6 +314,50 @@
     "scope": "Exploratory sequential 200-root Tuwunel controls; not statistical equivalence or 1,000-reply qualification.",
     "summary_script_sha256": "dc60611d32672b3ee33fb86a8cd796d5caa9125cec087bce000f1322b2b58d7a"
   },
+  "invalidation_review": {
+    "changes": [
+      "Changed or unknown recipients retire the old outbound Megolm session; profile-only refresh retains it.",
+      "Sliding tail requests fresh initial state when recovery leaves a joined room without a baseline.",
+      "A timing-sensitive consumer watchdog test now controls time and poll ordering while retaining real progress/grace handling."
+    ],
+    "date": "2026-09-06",
+    "evidence_directory": "durable-sync-kernel/review-invalidation-20260906",
+    "limits": [
+      "No new schema, queue, public API or consumer production behavior.",
+      "Fresh state authorizes future events only; the lost interval remains fenced.",
+      "Ciphertext retained before recipient refresh keeps its original retry semantics.",
+      "No new live capacity benchmark, speed claim or 1000-reply qualification."
+    ],
+    "new_producer_test_cases": 6,
+    "production_lines": {
+      "consumer_source_changes": 0,
+      "full_pr_added": 5226,
+      "full_pr_net": -1245,
+      "full_pr_removed": 6471,
+      "main_revision": "5b6de3bc6f4aa0c317185953f77c9c8fe3d806a3",
+      "review_added": 5,
+      "review_net": 5,
+      "review_removed": 0
+    },
+    "qualified_producer_revision": "76e4fa4bf441430227205671bb48448477d2a38c",
+    "reports_reproduced_and_fixed": 2,
+    "reviewed_producer_revision": "785c8353c24ba453063fc6caaa4c3dd7268d609c",
+    "verification": {
+      "consumer_affected_tests_passed": 337,
+      "consumer_affected_tests_skipped": 1,
+      "consumer_hooks_passed": true,
+      "consumer_python": "3.13.14",
+      "consumer_test_seconds": 7.78,
+      "installed_producer_source_files_matched": 60,
+      "producer_hooks_passed": true,
+      "producer_mypy_errors": 0,
+      "producer_mypy_source_files": 60,
+      "producer_suite_seconds": 71.88,
+      "producer_tests_passed": 885,
+      "producer_tests_skipped": 3,
+      "watchdog_generation_observation_mutation_rejected": true
+    }
+  },
   "limitations": [
     "Traced timing includes observer overhead.",
     "Native waits overlap thread CPU and cover a wider timer bracket.",
