@@ -23,6 +23,41 @@ Durable SQLite and PostgreSQL tables represent it with `thread_id TEXT NOT NULL`
 
 One shared boundary helper encodes `None` to the empty string and decodes it back, so primary keys and uniqueness constraints never depend on nullable equality.
 
+### Durable sync batch boundary
+
+The Matrix client uses `nio.durable.open_durable_sync` with Classic sync only.
+Account, device, consumer and stream ownership bind once when opening the session.
+The application trusts nio's typed records and does not reproduce a canonical
+JSON, digest or per-record proof protocol. Old unmerged ingestion formats are
+unsupported; ordinary existing journal and encryption data remain supported.
+
+One `SyncBatch` becomes an ordered vector of application dispositions. One
+journal transaction advances its sequence (starting at 1), applies every record,
+snapshots interactive sources and records the batch receipt. Any failure,
+including pending delivery projection, rolls back the entire vector. Redelivery
+of the last receipt performs no semantic effects. An empty completion batch
+still has a receipt and must be acknowledged.
+
+Nio splits membership authorization barriers into singleton batches. The pump
+runs pre-admission hooks, commits, then runs post-admission hooks in vector order
+before acknowledging. Live membership post-hooks retry after failure even when
+the receipt already exists; recovered membership never grants new authority.
+Ordinary semantic callbacks run only for newly admitted actionable events.
+Auxiliary nio callbacks and sync completion run at least once until acknowledgement
+and may repeat after a crash or callback failure.
+
+Restored decrypted to-device events pass through the same current signed-device
+authentication helper as fresh events, using the original encrypted envelope.
+Removed or changed devices fail closed. Nio never restores application subtypes.
+Self-authored pending/streaming replacements are filtered before classification;
+original placeholders, terminal and foreign edits, redactions, undecrypted content
+and unknown statuses retain normal handling.
+
+Quiesce stops new polling and drains already captured input while the pump stays
+alive. Close releases the session before the HTTP client. Local membership changes
+use the public ordered session API and journal membership tenure: initial join is
+epoch 0, departure increments it, and rejoin retains that increment.
+
 ### Durable admission
 
 Admission performs the journal insert or deduplication, membership-epoch validation, and the projection update in one transaction.
