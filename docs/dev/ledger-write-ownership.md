@@ -38,7 +38,8 @@ That shortcut is not a production implementation: benchmark root context does no
 
 ## Chosen ownership
 
-Keep one application database writer and its existing transaction and cancellation behavior.
+Keep the existing backend transaction and cancellation behavior.
+SQLite retains its one writer; Postgres retains its backend-owned transactions.
 Keep FULL durability, both pending-turn writes, the eight preparation slots, and every existing producer guarantee.
 Only conflicting ledger mutations need to serialize their complete read/derive/publish/commit-or-rollback sequence.
 There is no required global commit order between unrelated turns.
@@ -86,6 +87,22 @@ This change does not promise exactly-once external effects, remove bounded recov
 - Compare alternating unchanged-workload controls against the original source, checking exact replies, fence, drain, health, shutdown and source identity.
 - Record actual production size and measured results here before pushing the completed change.
 
-The diagnostic prototype is evidence only.
-Production acceptance remains pending the implementation, regressions and final controls above.
+## Implementation review
 
+The production implementation changes only ledger ownership in `src/mindroom/handled_turns.py` and its caller documentation in `src/mindroom/turn_store.py`.
+Relative to `738ee46bc`, the ledger adds 98 lines and removes 51: 47 net lines.
+Condensing the caller documentation removes another 19 net lines, making the total production-file increase 28 lines.
+The source change introduces no database or producer changes.
+
+Twenty new cases exercise both real SQLite and Postgres backends.
+The unrelated-write regression fails against the original global lock on both backends.
+The conflict cases cover source and discovery IDs, old-anchor deletion, definite failure, repeated cancellation, cancelled waiters and cleanup exclusion.
+Candidate-only conflicts are tested even when lookup IDs are unrelated: a provisional completed owner cannot permanently reject a competing candidate before its commit or rollback.
+An unsafe early-return mutation fails all four candidate-only cases; the restored implementation passes them.
+Independent review found no blocking issue in reservation closure, rollback, cancellation or cleanup ownership.
+The complete suite passes 15,542 tests with 22 skipped and 15 warnings in 92.31 seconds.
+The earlier focused ledger, turn-store and journal group passes 843 tests; the four candidate-only cases were added afterward and pass separately.
+All repository hooks pass, including types, dependency boundaries, module privacy and frontend checks.
+
+The diagnostic prototype remains evidence only.
+Production capacity acceptance awaits the alternating controls below.
