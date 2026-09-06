@@ -481,11 +481,13 @@ class MatrixDeliveryWorker:
         process_shutdown_requested: Callable[[], bool] | None = None,
     ) -> _FlushOutcome:
         """Finish an accepted Matrix attempt before propagating local cancellation."""
-        await self.store.record_matrix_delivery_device(
-            delivery_id=claimed.delivery_id,
-            stage=claimed.stage,
-            device_id=self.sending_device_id,
-        )
+        # The fresh claim winner already committed this device before returning.
+        if claimed.attempted or claimed.sending_device_id != self.sending_device_id:
+            await self.store.record_matrix_delivery_device(
+                delivery_id=claimed.delivery_id,
+                stage=claimed.stage,
+                device_id=self.sending_device_id,
+            )
         if process_shutdown_requested is not None and process_shutdown_requested():
             return _FlushOutcome(event_id=None)
         try:

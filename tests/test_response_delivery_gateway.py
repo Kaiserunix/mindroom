@@ -4144,6 +4144,11 @@ class TestTurnDeliverySerialization:
             thread_id=None,
             payload={"msgtype": "m.text", "body": "final"},
         )
+        await outbox.claim_matrix_delivery(
+            delivery_id="turn-1",
+            stage=DeliveryStage.FINAL,
+            sending_device_id="DEVICE1",
+        )
         device_write_started = asyncio.Event()
         finish_device_write = asyncio.Event()
         original_record_sending_device = outbox.record_matrix_delivery_device
@@ -4348,24 +4353,25 @@ class TestTurnDeliverySerialization:
     ) -> None:
         """A committed device marker is recoverable when shutdown precedes the send."""
         outbox = FakeOutbox()
-        device_write_started = asyncio.Event()
-        finish_device_write = asyncio.Event()
-        original_record_sending_device = outbox.record_matrix_delivery_device
+        claim_committed = asyncio.Event()
+        return_from_claim = asyncio.Event()
+        original_claim = outbox.claim_matrix_delivery
         sent: list[DeliveryStage] = []
 
-        async def record_device_then_wait(
+        async def claim_then_wait(
             *,
             delivery_id: str,
             stage: DeliveryStage,
-            device_id: str | None,
-        ) -> None:
-            device_write_started.set()
-            await finish_device_write.wait()
-            await original_record_sending_device(
+            sending_device_id: str | None = None,
+        ) -> MatrixDelivery | None:
+            claimed = await original_claim(
                 delivery_id=delivery_id,
                 stage=stage,
-                device_id=device_id,
+                sending_device_id=sending_device_id,
             )
+            claim_committed.set()
+            await return_from_claim.wait()
+            return claimed
 
         async def send(delivery: MatrixDelivery) -> str:
             sent.append(delivery.stage)
@@ -4378,7 +4384,7 @@ class TestTurnDeliverySerialization:
             sending_device_id="DEVICE1",
             process_shutdown_requested=current_task_is_process_shutdown,
         )
-        with patch.object(outbox, "record_matrix_delivery_device", side_effect=record_device_then_wait):
+        with patch.object(outbox, "claim_matrix_delivery", side_effect=claim_then_wait):
             final = asyncio.create_task(
                 delivery.deliver(
                     delivery_id="turn-1",
@@ -4388,9 +4394,9 @@ class TestTurnDeliverySerialization:
                     payload={"msgtype": "m.text", "body": "final"},
                 ),
             )
-            await device_write_started.wait()
+            await claim_committed.wait()
             request_task_cancel(final, process_shutdown=True)
-            finish_device_write.set()
+            return_from_claim.set()
 
             with pytest.raises(asyncio.CancelledError):
                 await final

@@ -983,6 +983,51 @@ class TestARelogInCannotDuplicateTheAnswer:
     one the homeserver has never seen from the device now using it.
     """
 
+    @pytest.mark.parametrize(
+        ("attempted", "original_device", "expected_device_writes"),
+        [(False, None, 0), (True, "DEVICE1", 1), (True, "DEVICE2", 1), (True, None, 1)],
+    )
+    async def test_fresh_claim_reuses_committed_device_intent(
+        self,
+        runtime: TurnRuntime,
+        attempted: bool,
+        original_device: str | None,
+        expected_device_writes: int,
+    ) -> None:
+        """Fresh claims already persist the device; retries keep their send boundary."""
+        await runtime.store.enqueue_matrix_delivery(
+            delivery_id=SOURCE,
+            stage=DeliveryStage.FINAL,
+            room_id=ROOM,
+            thread_id=None,
+            payload={"msgtype": "m.text", "body": "answer"},
+        )
+        if attempted:
+            await runtime.store.claim_matrix_delivery(
+                delivery_id=SOURCE,
+                stage=DeliveryStage.FINAL,
+                sending_device_id=original_device,
+            )
+
+        async def send(delivery: MatrixDelivery) -> str:
+            stored = await runtime.store.load_matrix_delivery(delivery_id=SOURCE, stage=DeliveryStage.FINAL)
+            assert stored is not None
+            assert stored.attempted
+            assert stored.sending_device_id == runtime.homeserver.device_id
+            return await runtime.homeserver.send(delivery)
+
+        with patch.object(
+            type(runtime.store),
+            "record_matrix_delivery_device",
+            wraps=runtime.store.record_matrix_delivery_device,
+        ) as record_device:
+            event_id = await replace(runtime.delivery, send=send).flush(delivery_id=SOURCE, stage=DeliveryStage.FINAL)
+
+        assert event_id is not None
+        assert runtime.homeserver.visible_messages == 1
+        assert runtime.homeserver.room_scans == int(attempted and original_device != "DEVICE1")
+        assert record_device.await_count == expected_device_writes
+
     async def test_the_transaction_id_stops_deduplicating_across_a_relogin(
         self,
         runtime: TurnRuntime,
