@@ -415,3 +415,30 @@ capacity workspace at `durable-sync-kernel/review-invalidation-20260906`.
 The Nio contract and implementation plan retain the ownership decisions.
 Previous performance measurements retain their exact original source IDs;
 this follow-up adds no fresh capacity, speed or 1,000-reply claim.
+
+## Native review boundary corrections
+
+Producer `a4feac63abeeaf71e9a04c0db507e96c9365e83c` contains five reproduced
+boundary corrections: disposed clients reject encryption and later HTTP work,
+quiescence discards completed but unaccepted polls, malformed room state cannot
+preserve LIVE authority, response validation logs omit server payloads, and
+Classic leave-room account data survives durable handoff and restart.
+The fixes use existing owners and add 20 net production lines. The full Nio PR
+remains 1,225 production lines smaller than main. No new framework or guarantee
+was introduced. A test-server connection cleanup also fixes the Python 3.12 hang
+without changing production retry behavior.
+
+Nio's full suite passes 911 tests with three skipped; 104 focused parser/sync
+checks also pass on Python 3.12. Mypy reports zero errors across 60 files and
+producer hooks pass. MindRoom pins
+this exact wheel; all 60 installed source files match it. The affected consumer
+check passes 337 tests with one skipped in 7.81 seconds. Consumer production
+code is unchanged; only the pin, lock and evidence index change.
+
+The persistent evidence directory is
+`durable-sync-kernel/review-invalidation-20260906/native-loop` within the capacity
+workspace. It retains independent whole-PR review dispositions, main-thread
+red/green tests, Python-version results, wheel hashes and consumer qualification.
+Review corrections require concrete realistic failures within the existing
+contract; speculative safeguards and large new abstractions are excluded.
+Prior performance measurements retain their original source revisions.
