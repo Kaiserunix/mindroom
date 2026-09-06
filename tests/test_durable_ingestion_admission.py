@@ -27,6 +27,7 @@ from mindroom.event_journal import (
     PrincipalStore,
 )
 from mindroom.event_journal import store as journal_store
+from mindroom.event_journal.sqlite_backend import SqliteBackend
 from mindroom.matrix import durable_ingestion
 from mindroom.matrix.client_session import authenticate_to_device_event
 from mindroom.matrix.durable_ingestion import consume_one_ingestion_batch, validate_ingestion_batch
@@ -87,6 +88,33 @@ async def principal_for(store: EventJournalStore, stream: UUID) -> PrincipalStor
     consumer = await principal.load_or_create_ingestion_consumer(new_generation=uuid4())
     await principal.bind_ingestion_stream(generation=consumer.generation, stream_id=stream)
     return principal
+
+
+@pytest.mark.parametrize("departed", [False, True])
+@pytest.mark.asyncio
+async def test_batch_admission_reuses_locked_membership_without_epoch_selects(tmp_path: Path, departed: bool) -> None:
+    backend = SqliteBackend.open(tmp_path / "journal.db")
+    store = EventJournalStore(backend)
+    stream = uuid4()
+    principal = await principal_for(store, stream)
+    join = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership(None, "join", 0, 0))
+    await consume_one_ingestion_batch(Session(SyncBatch(stream, 1, (join,))), principal, account_id=ACCOUNT)
+    records = tuple(message(f"$event-{index}") for index in range(16))
+    if departed:
+        leave = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership("join", "leave", 0, 1))
+        records = (leave, *records)
+    statements: list[str] = []
+    backend._writer.set_trace_callback(statements.append)
+    try:
+        facts = await consume_one_ingestion_batch(Session(SyncBatch(stream, 2, records)), principal, account_id=ACCOUNT)
+    finally:
+        backend._writer.set_trace_callback(None)
+        await store.close()
+    assert facts.receipt_new
+    assert facts.semantic_event_new is not departed
+    epoch_reads = [sql for sql in statements if sql.startswith("SELECT membership_epoch FROM room_membership ")]
+    # Leaving still reads the previous epoch when advancing membership.
+    assert len(epoch_reads) <= int(departed), f"Membership epoch selected {len(epoch_reads)} times"
 
 
 @pytest.mark.asyncio
@@ -232,9 +260,11 @@ async def test_batch_binding_order_and_semantic_duplicates(journal_database: Cal
         await consume_one_ingestion_batch(Session(batch), principal, account_id=ACCOUNT)
 
 
+@pytest.mark.parametrize("single_batch", [False, True])
 @pytest.mark.asyncio
 async def test_membership_tenure_fences_departed_work_and_retains_rejoin_epoch(
     journal_database: Callable[[], EventJournalStore],
+    single_batch: bool,
 ) -> None:
     store = journal_database()
     stream = uuid4()
@@ -248,13 +278,16 @@ async def test_membership_tenure_fences_departed_work_and_retains_rejoin_epoch(
         message("$after"),
     )
     facts = []
-    for sequence, record in enumerate(records, 1):
-        facts.append(
-            await consume_one_ingestion_batch(
-                Session(SyncBatch(stream, sequence, (record,))),
-                principal,
-                account_id=ACCOUNT,
-            ),
+    batches = (records,) if single_batch else tuple((record,) for record in records)
+    for sequence, batch_records in enumerate(batches, 1):
+        facts.extend(
+            (
+                await consume_one_ingestion_batch(
+                    Session(SyncBatch(stream, sequence, batch_records)),
+                    principal,
+                    account_id=ACCOUNT,
+                )
+            ).record_facts,
         )
     assert facts[1].semantic_event_new
     assert not facts[3].semantic_event_new

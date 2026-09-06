@@ -205,3 +205,19 @@ No production code, dependency or correctness guarantee changes in this profilin
 
 Retained evidence is under `startup-waits` in the capacity workspace: `trace-200-20260906T141302Z`, `sample-200-20260906T141922Z`, `gil-001-200-20260906T142431Z`, `pool-four-200-20260906T142914Z` and `control-200-20260906T143211Z`.
 The correlated reports distinguish task waits, ready delays, thread CPU, exclusive writer phases and sampled native waits rather than summing overlapping measurements.
+
+## Reuse the membership version inside one admission
+
+Batch admission already locks and reads each event's current membership state.
+Pass that state's membership version into the existing insert/project helper instead of selecting it again.
+Standalone admission still reads the version in its existing transaction before invoking that helper.
+The value belongs to one event operation: subsequent records still observe any intervening leave/rejoin transition, and Postgres retains the same row lock.
+This changes no transaction, durable fact, persistent format, public store API or writer scheduling policy.
+The production candidate adds nine net lines across the existing journal and store modules.
+SQLite statement tracing verifies that sixteen events add no per-event membership-version SELECT, including the departure-suppressed path.
+The membership test also exercises leave/rejoin within one batch on both SQLite and Postgres.
+Acceptance requires the existing correctness checks and unchanged-workload benchmarks against a separate committed baseline; query removal alone is not an end-to-end speedup claim.
+The focused group passes 42 tests, and the complete suite passes 15,546 tests with 22 skipped and 15 warnings in 91.38 seconds.
+An initial full run exposed a 500 ms guard in the projection-progress test; a controlled 650 ms delay after successful admission reproduces that failure without changing the database result.
+The test now sets a 30-second retry backoff and a two-second hang guard, retaining the requirement that admission progress independently of unrelated retries while allowing ordinary database latency.
+The controlled-delay probe passes, and scoped review finds no blockers in either the epoch reuse or the test's retained progress guarantee.

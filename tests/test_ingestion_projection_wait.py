@@ -226,7 +226,10 @@ async def test_bot_projection_wait_reuses_recovery_and_shields_pump_cancellation
 async def test_projected_reaction_settles_while_unrelated_outbox_debt_keeps_retrying(
     journal_database: Callable[[], EventJournalStore],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Prove progress during backoff without imposing a subsecond DB deadline.
+    monkeypatch.setattr("mindroom.bot._DELIVERY_RECOVERY_RETRY_INITIAL_DELAY_SECONDS", 30.0)
     store = journal_database()
     principal, edit, batch = await _projection_case(store)
     await principal.enqueue_matrix_delivery(
@@ -274,7 +277,7 @@ async def test_projected_reaction_settles_while_unrelated_outbox_debt_keeps_retr
         )
         try:
             await asyncio.wait_for(pass_done.wait(), timeout=2)
-            await asyncio.wait_for(idle.wait(), timeout=0.5)
+            await asyncio.wait_for(idle.wait(), timeout=2)
             assert session.acked == [batch]
             assert bot._delivery_recovery_task is not None
             assert not bot._delivery_recovery_task.done()

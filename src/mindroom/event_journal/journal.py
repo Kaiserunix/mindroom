@@ -214,6 +214,7 @@ def _admit_suppressed_semantic_identity(
     transaction: Transaction,
     principal_id: str,
     event: InboundEvent,
+    membership_epoch: int,
 ) -> None:
     """Retain a settled identity for turn work fenced out of this tenure."""
     result = admit(
@@ -221,6 +222,7 @@ def _admit_suppressed_semantic_identity(
         principal_id,
         replace(event, event_class=EventClass.CONTEXT_ONLY),
         None,
+        membership_epoch=membership_epoch,
     )
     if result is AdmissionResult.ADMITTED:
         return
@@ -239,9 +241,9 @@ def _apply_semantic_ingestion_disposition(
     """Admit or deduplicate one semantic event under the locked tenure."""
     state = _claim_membership_state(transaction, principal_id, event.room_id)
     if event.kind in TURN_BACKED_KINDS and state.departure_fenced:
-        _admit_suppressed_semantic_identity(transaction, principal_id, event)
+        _admit_suppressed_semantic_identity(transaction, principal_id, event, state.membership_epoch)
         return False
-    semantic_result = admit(transaction, principal_id, event, projected)
+    semantic_result = admit(transaction, principal_id, event, projected, membership_epoch=state.membership_epoch)
     if semantic_result is AdmissionResult.ADMITTED:
         return event.event_class is EventClass.ACTIONABLE
     if semantic_result is AdmissionResult.DUPLICATE:
@@ -1165,6 +1167,8 @@ def admit(
     principal_id: str,
     event: InboundEvent,
     projected: ProjectedEvent | None,
+    *,
+    membership_epoch: int,
 ) -> AdmissionResult:
     """Insert, deduplicate, and project one event in a single transaction.
 
@@ -1174,7 +1178,6 @@ def admit(
     into the raw-event cache this design exists to remove, at roughly half a
     kilobyte for every message the bot has ever seen.
     """
-    epoch = current_membership_epoch(transaction, principal_id, event.room_id)
     actionable = event.event_class is EventClass.ACTIONABLE
     row = transaction.fetchone(
         """
@@ -1198,7 +1201,7 @@ def admit(
                 if actionable
                 else ""
             ),
-            epoch,
+            membership_epoch,
             PENDING_STATE if actionable else SETTLED_STATE,
         ),
     )
@@ -1211,7 +1214,7 @@ def admit(
             principal_id,
             projected,
             receipt_order=int(row["receipt_order"]),
-            membership_epoch=epoch,
+            membership_epoch=membership_epoch,
         )
     if tombstoned_event_id is not None:
         _settle_tombstoned_turn_source(
