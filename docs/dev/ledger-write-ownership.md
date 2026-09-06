@@ -352,3 +352,23 @@ The next bounded candidate is eliminating the provably fresh attempt's duplicate
 These are candidates, not promised speedups or authorization to weaken recovery, membership or source-settlement semantics.
 A new database process, different driver, larger preparation pool or broad scheduling rewrite is not justified by these measurements alone.
 1,000 concurrent replies remain unqualified.
+
+## Bounded delivery-transaction trial
+
+The next experiment compares two small candidates against the retained production source at `1b10db607`.
+First, omit device rebinding only when a fresh claim already committed this worker's sending device.
+Previously attempted deliveries keep the existing reconciliation and pre-send device write, even when the returned marker matches.
+Second, add `enqueue_and_claim_matrix_delivery` to the delivery store view, using the existing enqueue and claim operations in one backend transaction.
+Its result distinguishes refused enqueue from accepted enqueue with a blocked claim: return `(accepted, claimed)` so FINAL still releases its source handoff when INITIAL prevents sending it yet.
+The worker consumes that committed claim through the same post-claim checks used by recovery.
+Separate enqueue and claim remain available to callers that intentionally persist an intent before a later recovery pass.
+No network call or callback moves into a transaction, and the existing membership, frozen-payload, device-reconciliation, cancellation and INITIAL/FINAL ordering rules remain required.
+
+- [ ] Test that a fresh send's device intent is committed before network I/O without a duplicate device write; keep retry and changed-device coverage.
+- [ ] Implement and benchmark the first candidate against an uninstrumented 200-root control.
+- [ ] Test combined enqueue/claim atomicity, blocked FINAL source handoff, refusal and recovery behavior; then implement the second candidate.
+- [ ] Benchmark the combined candidate under the same FULL durability, eight preparations and original capacity predicates.
+- [ ] Retain only changes with a worthwhile measured result; run the full suite and hooks on the retained tree, self-review, document and push.
+
+Run controls sequentially with fixed source identity and no competing tests or benchmarks.
+If a result is small or inconsistent, do not grow the implementation to rescue it.
