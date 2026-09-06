@@ -45,10 +45,10 @@ Use the test-driven-development and verification-before-completion skills, with 
 - [x] Add bounded-concurrency, source-ownership, failure/retry, graceful drain, bounded cancellation, and metadata-cleanup regressions in `tests/test_root_preparation_scheduling.py`.
 - [x] Update `src/mindroom/coalescing.py` to register bounded detached root claims and include them in existing ownership and drain traversal.
 - [x] Preserve explicit-thread and room-mode ordering, media/caption grouping, readiness, and bypass barriers; run the owning-seam and integration tests.
-- [ ] Compare serial and concurrent preparation with a controlled real-gate benchmark, then repeat the unchanged real Tuwunel and Synapse 200-conversation controls on frozen source.
+- [x] Compare serial and concurrent preparation with a controlled real-gate benchmark, then run the unchanged real Tuwunel and Synapse 200-conversation controls on verified source. Preserve failed acceptance results.
 - [x] Run the full scheduling test suite: 15,850 passed, 22 skipped (16 warnings), including all 12 new scheduling cases.
 - [x] Update the Nio artifact pin to verified commit `398dae4d7e7079e3dd5e7a3f360b4f1ec2573c6e`; its installed files match the tested wheel. Complete repository hooks pass, including full-project types and frontend checks.
-- [ ] Record actual latency, acceptance results, and production line growth here, self-review, commit, and push the existing PR.
+- [x] Record actual latency, acceptance results, and production line growth here; complete independent review and publish the implementation and evidence on the existing PR.
 
 ## Results
 
@@ -98,3 +98,26 @@ Its passing result covers the scheduling suite but does not certify the final co
 A repeat with automatic resync disabled for the suite and its subprocesses passed 15,850 tests, with 22 skipped and 16 warnings, in 133.41 seconds.
 All 72 installed Nio source files matched the wheel and reviewed source both before and after the suite.
 The final Git pin `398dae4d7e7079e3dd5e7a3f360b4f1ec2573c6e` installs those same files; this equality check connects the built-artifact tests to the committed dependency.
+
+## Final integrated capacity results
+
+The final controls used Nio `398dae4` and MindRoom `55c37f9f3`, with unchanged production source, installed-package hashes, 200 roots, 180-second shared deadline, 45-second full-overlap requirement and two-second health read.
+All three runs completed 200 exact replies and reported no application errors, event-loop stalls or degraded reads.
+Times include approximately 60 seconds of synthetic generation.
+
+| Control | Reply median | Reply p95 | Full overlap | Fence principals settled | Application pending / outbox |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Tuwunel | 74.607 s | 83.888 s | 44.250 s | 3/3 | 0 / 0 |
+| Synapse 5,000-event cap | 80.235 s | 86.141 s | 47.714 s | 2/3 | 1 / 0 |
+| Same-source Synapse repeat | 80.058 s | 87.582 s | 48.262 s | 1/3 | 0 / 0 |
+
+Tuwunel passed the fence, drain, later-sync and clean-shutdown checks; its sole acceptance failure was overlap below 45 seconds.
+Both Synapse runs failed fence qualification. The repeat's failure traceback identifies expiration of the shared 180-second deadline during fence observation, rather than the two-second health timeout.
+The responder continued admitting older streaming edits through the deadline and cleanup; this is catch-up capacity exhaustion, with no evidence of a frozen owner.
+The first failed Synapse run contained 7.7% more observer journal traffic than the earlier passing control, so those runs do not establish a per-event processing regression.
+
+Application queue counts after cleanup are not a Nio drain certificate: the repeat still retained authenticated Frames and Work even though its application journal/outbox counts were zero.
+Keep both failures visible. These changes isolate independent preparation and restore interactive key sharing; they do not qualify this single-process workload at the full 200-conversation target.
+The shared persistence and catch-up throughput limit remains separate work, with no relaxed deadline, dropped durable events, second writer or codec replacement in this change.
+
+Runtime CI passed: Nio Python 3.12/3.13/3.14 tests, types and hooks; MindRoom's remote suite (15,848 passed, 12 skipped), all four full/minimal AMD64/ARM64 image builds, and the complete smoke stack.
