@@ -139,3 +139,69 @@ It completes all 200 replies with 13.156 seconds of initial reply spread, 54.219
 All three fence principals settle; producer, journal and outbox debt is zero after clean shutdown, with no event-loop stalls or degraded reads.
 This is an additional server qualification, not an alternating Synapse performance comparison.
 Its source-verified evidence is `controls-20260906T131520Z` in the capacity workspace.
+
+## Next startup dependency, measured on the committed fix
+
+The follow-up uses MindRoom `72a5f5d4f` (production change `5502b1177`) and Nio `adddd44`, with the same installed producer source and workload.
+Diagnostic wrappers live outside the repositories; source hashes and loaded modules match before and after every run.
+They correlate all 200 responder preparations with their actual task, awaited coroutine chain, capacity blockers, writer operation and worker thread.
+A known 40 ms ready-but-not-running probe verifies the scheduling measurement, and all twelve real preparation-scheduling tests pass with instrumentation installed.
+The trace drops no records.
+
+The next dependency is the shared consumer database writer.
+The eight preparation slots wait for active preparations; those preparations mostly await their first pending-turn persistence; that persistence queues behind other journal operations.
+The previously removed global ledger lock is no longer the limiting owner.
+
+| Measurement in the traced 200-root startup | Result |
+| --- | ---: |
+| First input to last initial visible reply | 13.357 s |
+| Aggregate preparation lifetime, overlapping across tasks | 92.039 s |
+| Aggregate preparation wait inside pending-turn persistence | 90.114 s (97.9%) |
+| Preparation task CPU | 0.752 s |
+| Capacity-wait wall-time union | 11.009 s |
+| First slot release to capacity waiter resumption, median / p95 | 0.022 / 1.232 ms |
+| Write call to dequeue, median / p95 | 498.646 / 751.012 ms |
+
+The preparation lifetime and persistence waits overlap across tasks: they are not 92 or 90 seconds of end-to-end delay.
+A ready preparation spends little time waiting to run; raising the preparation limit would not increase the serial writer's service rate.
+The matched startup window contains 0.491 seconds handing work to a worker, 10.242 seconds inside the worker and 2.612 seconds propagating completion back through the writer.
+Together these occupy 99.9% of the window, but worker thread CPU is only 0.971 seconds.
+An occupied writer does not imply CPU saturation or continuous disk activity.
+Admission accounts for 3.118 seconds of worker execution, turn upserts 1.767 seconds, delivery operations 3.421 seconds and hydration 1.619 seconds.
+Nio synchronous transactions occupy approximately 1.008 seconds on the event loop in this run; this overlaps the other waits and must not be added to them.
+
+A separate 25 Hz native py-spy capture finds 7.353 sampled wall-seconds in synchronization waits and 2.020 in filesystem synchronization out of 10.327 sampled writer wall-seconds.
+These are weighted samples from the active writer's stacks, not CPU time or exact syscall durations.
+Native symbols are incomplete; the condition-variable/futex frames do not identify every lock owner or prove that the GIL alone causes the delay.
+Clock alignment retains 84 ms of uncertainty.
+Native sampling increases initial reply spread to 15.612 seconds.
+The application completes all replies, fences and drains, but the profiler parent exits with a child-reaping error after application shutdown.
+That run fails the clean-shutdown predicate and is diagnostic evidence only.
+
+Two separate uninstrumented sensitivity trials leave SQL, transactions, durability and preparation capacity unchanged.
+One changes only the Python thread switch interval from 5 ms to 1 ms.
+The other limits the existing ordinary SQLite offload pool from 32 workers to four; the separate recovery worker remains unchanged.
+Both settings are verified in the child and labeled runtime diagnostic patches, rather than normal production controls.
+
+| Run | Initial reply spread | Full overlap | Completion median | Completion p95 | Acceptance |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Existing fixed-source controls | 12.028–12.074 s | 49.744–49.901 s | 69.809–70.188 s | 75.945–76.096 s | PASS |
+| Task/writer tracing | 12.524 s | 49.891 s | 71.355 s | 77.134 s | PASS |
+| 1 ms thread switch interval | 12.338 s | 49.771 s | 70.094 s | 76.093 s | PASS |
+| Four ordinary SQLite workers | 12.430 s | 49.450 s | 70.454 s | 76.368 s | PASS |
+| Final normal control | 12.083 s | 49.817 s | 69.975 s | 76.412 s | PASS |
+
+The final normal control and both sensitivity trials complete all 200 replies, settle all three fence principals and leave zero producer, journal or outbox debt after clean shutdown.
+The unchanged 45-second overlap and two-second health requirements pass.
+Neither tuning trial establishes a startup improvement, so neither setting is adopted.
+The four-worker trial uses less peak memory in this one run; that is not a repeated memory qualification or a reason to call it a latency fix.
+
+Keep the existing design and FULL durability.
+The next bounded investigation should count and time SQL statements within the existing admission transaction, especially repeated membership-state/epoch lookups visible in the native stacks.
+Admission is the largest measured worker category; reducing repeated work there is a candidate to benchmark, not an established speedup.
+Any reuse must preserve membership transitions within a batch and Postgres locking semantics.
+Earlier grouped-commit and worker-handoff trials did not justify adoption; a saturated writer alone does not justify reviving those designs, adding another queue or increasing preparation concurrency.
+No production code, dependency or correctness guarantee changes in this profiling follow-up; 1,000 concurrent replies remain unqualified.
+
+Retained evidence is under `startup-waits` in the capacity workspace: `trace-200-20260906T141302Z`, `sample-200-20260906T141922Z`, `gil-001-200-20260906T142431Z`, `pool-four-200-20260906T142914Z` and `control-200-20260906T143211Z`.
+The correlated reports distinguish task waits, ready delays, thread CPU, exclusive writer phases and sampled native waits rather than summing overlapping measurements.
