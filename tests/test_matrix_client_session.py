@@ -15,7 +15,7 @@ from uuid import UUID
 import aiohttp
 import nio
 import pytest
-from nio.ingest.config import ClassicSourceConfig, IngestionConfig
+from nio.durable import DurableSyncConfig
 from nio.store.database import DefaultStore, SqliteStore
 
 from mindroom.constants import (
@@ -692,12 +692,7 @@ async def test_owned_matrix_session_factory_creates_one_fresh_store_and_binding(
         "AGENTDEVICE",
         "access-token",
     )
-    config = IngestionConfig(
-        ClassicSourceConfig(
-            timeout_ms=30_000,
-            filter_json=b'{"room":{"timeline":{"limit":50}}}',
-        ),
-    )
+    config = DurableSyncConfig(sync_timeout_ms=30_000)
 
     opened = await _owned_session.open_owned_matrix_session(
         "https://matrix.example.org",
@@ -715,9 +710,9 @@ async def test_owned_matrix_session_factory_creates_one_fresh_store_and_binding(
         assert opened.client.user_id == credentials.user_id
         assert opened.client.device_id == credentials.device_id
         assert opened.client.access_token == credentials.access_token
-        assert type(opened.client.store) is SqliteStore
+        assert isinstance(opened.client.store, SqliteStore)
         assert opened.client.olm is not None
-        assert opened.session.next_batch(max_records=1) is None
+        assert await opened.session.next_batch() is None
         consumer_store.load_or_create_ingestion_consumer.assert_awaited_once_with(
             new_generation=generation,
         )
@@ -732,8 +727,6 @@ async def test_owned_matrix_session_factory_creates_one_fresh_store_and_binding(
         assert database_path.is_file()
     finally:
         await opened.session.close()
-        assert opened.client.store is None
-        assert opened.client.olm is None
         await opened.client.close()
 
 
@@ -755,12 +748,7 @@ async def test_owned_matrix_session_factory_reopens_with_established_consumer_id
         "AGENTDEVICE",
         "access-token",
     )
-    config = IngestionConfig(
-        ClassicSourceConfig(
-            timeout_ms=30_000,
-            filter_json=b'{"room":{"timeline":{"limit":50}}}',
-        ),
-    )
+    config = DurableSyncConfig(sync_timeout_ms=30_000)
     journal = EventJournalStore.open_sqlite(tmp_path / "event-journal.db")
     principal = journal.principal(credentials.user_id)
     reopened: _owned_session.OwnedMatrixSession | None = None
@@ -809,11 +797,7 @@ async def test_owned_matrix_session_factory_reopens_with_established_consumer_id
         )
 
         assert reopened.consumer == established
-        owner = reopened.session._journal.load_owner()
-        assert (owner.consumer_generation, owner.stream_id) == (
-            established.generation,
-            established.stream_id,
-        )
+        assert reopened.session.stream_id == established.stream_id
         assert await consumer_row() == before
     finally:
         if reopened is not None:
@@ -851,13 +835,8 @@ async def test_owned_matrix_session_factory_failure_closes_http_and_reopens(
         "AGENTDEVICE",
         "access-token",
     )
-    config = IngestionConfig(
-        ClassicSourceConfig(
-            timeout_ms=30_000,
-            filter_json=b'{"room":{"timeline":{"limit":50}}}',
-        ),
-    )
-    real_open = _owned_session._open_owned_ingestion
+    config = DurableSyncConfig(sync_timeout_ms=30_000)
+    real_open = _owned_session.open_durable_sync
     failed_clients: list[nio.AsyncClient] = []
     transfer_error = RuntimeError("owned transfer failed")
 
@@ -868,7 +847,7 @@ async def test_owned_matrix_session_factory_failure_closes_http_and_reopens(
         failed_clients.append(client)
         raise transfer_error
 
-    monkeypatch.setattr(_owned_session, "_open_owned_ingestion", fail_transfer)
+    monkeypatch.setattr(_owned_session, "open_durable_sync", fail_transfer)
     with pytest.raises(RuntimeError, match="owned transfer failed"):
         await _owned_session.open_owned_matrix_session(
             "https://matrix.example.org",
@@ -881,7 +860,7 @@ async def test_owned_matrix_session_factory_failure_closes_http_and_reopens(
 
     assert len(failed_clients) == 1
     failed_clients[0].close.assert_awaited_once()  # type: ignore[attr-defined]
-    monkeypatch.setattr(_owned_session, "_open_owned_ingestion", real_open)
+    monkeypatch.setattr(_owned_session, "open_durable_sync", real_open)
     reopened = await _owned_session.open_owned_matrix_session(
         "https://matrix.example.org",
         credentials,
@@ -926,12 +905,7 @@ async def test_owned_matrix_session_factory_cancellation_releases_bootstrap(
         "AGENTDEVICE",
         "access-token",
     )
-    config = IngestionConfig(
-        ClassicSourceConfig(
-            timeout_ms=30_000,
-            filter_json=b'{"room":{"timeline":{"limit":50}}}',
-        ),
-    )
+    config = DurableSyncConfig(sync_timeout_ms=30_000)
 
     with pytest.raises(asyncio.CancelledError):
         await _owned_session.open_owned_matrix_session(
@@ -1002,12 +976,7 @@ async def test_owned_matrix_session_factory_adopts_default_then_reopens_marked(
     identity_keys = dict(legacy.olm.account.identity_keys)
     await legacy.close()
     legacy.store.database.close()
-    config = IngestionConfig(
-        ClassicSourceConfig(
-            timeout_ms=30_000,
-            filter_json=b'{"room":{"timeline":{"limit":50}}}',
-        ),
-    )
+    config = DurableSyncConfig(sync_timeout_ms=30_000)
 
     adopted = await _owned_session.open_owned_matrix_session(
         "https://matrix.example.org",
@@ -1017,7 +986,7 @@ async def test_owned_matrix_session_factory_adopts_default_then_reopens_marked(
         new_consumer_generation=generation,
         config=config,
     )
-    assert type(adopted.client.store) is SqliteStore
+    assert isinstance(adopted.client.store, SqliteStore)
     assert adopted.client.olm is not None
     assert adopted.client.olm.account.identity_keys == identity_keys
     first_stream = adopted.consumer.stream_id
@@ -1034,7 +1003,7 @@ async def test_owned_matrix_session_factory_adopts_default_then_reopens_marked(
     )
     try:
         assert reopened.consumer.stream_id == first_stream
-        assert type(reopened.client.store) is SqliteStore
+        assert isinstance(reopened.client.store, SqliteStore)
         assert reopened.client.olm is not None
         assert reopened.client.olm.account.identity_keys == identity_keys
     finally:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
@@ -11,15 +10,9 @@ from uuid import UUID
 
 import nio
 import pytest
-from nio.ingest import (
-    EventRecord,
-    RecordKind,
-    RecordOrigin,
-    TimelineEventProvenance,
-    TransportKind,
-)
-from nio.ingest.serialization import batch_from_records
-from nio.store._sync_journal_values import _FrameCompletion
+from nio import TimelineEventProvenance
+from nio.durable import RecordKind, SyncBatch, SyncRecord
+from nio.durable.model import OwnMembership
 
 from mindroom.agent_reply_membership import AgentReplyMembershipIndex
 from mindroom.agent_reply_membership_sync import AgentReplyMembershipSync
@@ -35,6 +28,7 @@ from mindroom.constants import ROUTER_AGENT_NAME, SOURCE_KIND_KEY
 from mindroom.event_journal import (
     AdmissionFacts,
     IngestionBatchAdmission,
+    IngestionRecordAdmission,
     IngestionRecordDisposition,
 )
 from mindroom.hooks import (
@@ -145,47 +139,23 @@ _FRESH_RECEIPT_FACTS = AdmissionFacts(receipt_new=True, semantic_event_new=False
 _REPLAY_FACTS = AdmissionFacts(receipt_new=False, semantic_event_new=False)
 
 
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
-
-
 def _validated_timeline_admission(
     bot: AgentBot,
     room_id: str,
     event: dict[str, object],
     *,
-    transport: TransportKind,
-    sequence: int,
-) -> IngestionBatchAdmission:
-    """Convert one exact current-nio LIVE record into MindRoom's admission value."""
-    event_id = event["event_id"]
-    assert isinstance(event_id, str)
-    record = EventRecord(
-        f"timeline:{sequence}:{event_id}",
-        RecordKind.TIMELINE,
-        RecordOrigin(transport, 1, 1, sequence),
-        room_id,
-        0,
-        sequence,
-        event_id,
-        TimelineEventProvenance.LIVE,
-        _canonical_json(event),
-        None,
-    )
-    batch = batch_from_records(
-        account_id=bot.matrix_id.full_id,
-        device_id=_DEVICE_ID,
-        consumer_generation=_CONSUMER_GENERATION,
-        stream_id=_STREAM_ID,
-        sequence=sequence,
-        created_revision=sequence + 1,
-        records=(record,),
-    )
+    transport: str = "classic",
+    sequence: int = 0,
+) -> IngestionRecordAdmission:
+    del transport
     return validate_ingestion_batch(
-        batch,
+        SyncBatch(
+            _STREAM_ID,
+            sequence + 1,
+            (SyncRecord(RecordKind.TIMELINE, room_id, event, provenance=TimelineEventProvenance.LIVE),),
+        ),
         account_id=bot.matrix_id.full_id,
-        device_id=_DEVICE_ID,
-    )
+    ).records[0]
 
 
 def _validated_reported_membership_admission(
@@ -195,72 +165,36 @@ def _validated_reported_membership_admission(
     previous_membership: str | None,
     membership: str,
     previous_epoch: int,
-    transport: TransportKind = TransportKind.CLASSIC,
+    transport: str = "classic",
     sequence: int = 0,
     event_id: str | None = None,
-) -> IngestionBatchAdmission:
-    """Convert one exact current-nio reported room transition into an admission."""
-    membership_epoch = previous_epoch + int(previous_membership == "join" and membership != "join")
-    source_kind = "section" if event_id is None else "timeline"
-    record_id = f"membership:{sequence}:{event_id or membership}"
-    source = {
-        "event_id": event_id,
-        "membership": membership,
-        "membership_epoch": membership_epoch,
-        "membership_provenance": "reported",
-        "previous_membership": previous_membership,
-        "previous_membership_epoch": previous_epoch,
-        "source_kind": source_kind,
-        "source_record_id": None if event_id is None else record_id,
-        "timeline_provenance": None if event_id is None else "live",
-    }
-    record = EventRecord(
-        record_id,
-        RecordKind.ROOM_LIFECYCLE,
-        RecordOrigin(transport, 1, 1, sequence),
-        room_id,
-        membership_epoch,
-        sequence,
-        None,
-        None,
-        _canonical_json(source),
-        None,
-    )
-    batch = batch_from_records(
-        account_id=bot.matrix_id.full_id,
-        device_id=_DEVICE_ID,
-        consumer_generation=_CONSUMER_GENERATION,
-        stream_id=_STREAM_ID,
-        sequence=sequence,
-        created_revision=sequence + 1,
-        records=(record,),
-    )
+) -> IngestionRecordAdmission:
+    del transport, event_id
+    epoch = previous_epoch + int(previous_membership == "join" and membership != "join")
     return validate_ingestion_batch(
-        batch,
+        SyncBatch(
+            _STREAM_ID,
+            sequence + 1,
+            (
+                SyncRecord(
+                    RecordKind.ROOM_LIFECYCLE,
+                    room_id,
+                    {},
+                    membership=OwnMembership(
+                        previous_membership,
+                        membership,
+                        previous_epoch,
+                        epoch,
+                    ),
+                ),
+            ),
+        ),
         account_id=bot.matrix_id.full_id,
-        device_id=_DEVICE_ID,
-    )
+    ).records[0]
 
 
-def _history_loss_admission(room_id: str) -> IngestionBatchAdmission:
-    """Return the normalized durable fact emitted for an unresolved room gap."""
-    return IngestionBatchAdmission(
-        schema_version=1,
-        consumer_generation=_CONSUMER_GENERATION,
-        stream_id=_STREAM_ID,
-        sequence=0,
-        sha256=b"\0" * 32,
-        record_id="history-loss",
-        disposition=IngestionRecordDisposition.HISTORY_LOSS,
-        source=None,
-        room_id=room_id,
-        previous_membership=None,
-        membership=None,
-        previous_membership_epoch=None,
-        membership_epoch=None,
-        event=None,
-        projected=None,
-    )
+def _history_loss_admission(room_id: str) -> IngestionRecordAdmission:
+    return IngestionRecordAdmission(IngestionRecordDisposition.HISTORY_LOSS, room_id=room_id)
 
 
 def _plugin(name: str, callbacks: list[object]) -> object:
@@ -278,16 +212,8 @@ def _plugin(name: str, callbacks: list[object]) -> object:
 
 async def _complete_frame(bot: AgentBot, index: int = 0) -> None:
     """Drive runtime side effects through the durable completion owner."""
-    await bot._on_ingestion_frame_completion(
-        _FrameCompletion(
-            UUID(f"10000000-0000-4000-8000-{index + 1:012d}"),
-            TransportKind.CLASSIC,
-            0,
-            index,
-            index * 2 + 1,
-            index * 2 + 2,
-        ),
-    )
+    del index
+    await bot._on_ingestion_frame_completion()
 
 
 @pytest.mark.asyncio
@@ -503,37 +429,6 @@ def test_router_sync_loop_start_revokes_room_backed_grants(tmp_path: Path) -> No
     orchestrator.invalidate_agent_reply_memberships.assert_called_once_with(reason="sync_loop_started")
 
 
-def test_router_prepared_startup_snapshot_survives_only_the_first_sync_start(tmp_path: Path) -> None:
-    """The pre-sync snapshot must reach first admission, while reconnect still fails closed."""
-    bot, orchestrator = _router_bot_with_orchestrator(tmp_path)
-
-    bot.preserve_reply_memberships_on_next_sync_start()
-    bot.mark_sync_loop_started()
-    orchestrator.invalidate_agent_reply_memberships.assert_not_called()
-
-    bot.mark_sync_loop_started()
-    orchestrator.invalidate_agent_reply_memberships.assert_called_once_with(reason="sync_loop_started")
-
-
-@pytest.mark.asyncio
-async def test_router_prepared_startup_snapshot_refreshes_after_the_first_sync(tmp_path: Path) -> None:
-    """The first response closes the gap between the pre-sync snapshot and receive start."""
-    bot, orchestrator = _router_bot_with_orchestrator(tmp_path)
-    bot.client = make_matrix_client_mock(user_id=bot.agent_user.user_id)
-
-    bot.preserve_reply_memberships_on_next_sync_start()
-    bot.mark_sync_loop_started()
-
-    with (
-        patch("mindroom.bot.mark_matrix_sync_success", return_value=datetime.now(UTC)),
-        patch.object(bot, "_maybe_start_deferred_overdue_task_drain"),
-    ):
-        await _complete_frame(bot)
-
-    orchestrator.invalidate_agent_reply_memberships.assert_not_called()
-    orchestrator.refresh_agent_reply_memberships.assert_awaited_once_with()
-
-
 @pytest.mark.asyncio
 async def test_router_first_response_refreshes_room_backed_grants(tmp_path: Path) -> None:
     """The first successful response in each receive generation rebuilds grants."""
@@ -582,7 +477,7 @@ def test_router_limited_sync_invalidates_before_timeline_admission(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transport", ["classic", "sliding"])
+@pytest.mark.parametrize("transport", ["classic"])
 async def test_router_departure_revokes_grant_before_timeline_admission(
     tmp_path: Path,
     transport: str,
@@ -613,7 +508,7 @@ async def test_router_departure_revokes_grant_before_timeline_admission(
         previous_membership="join",
         membership="leave",
         previous_epoch=0,
-        transport=TransportKind(transport),
+        transport=transport,
     )
     second_departure = _validated_reported_membership_admission(
         bot,
@@ -621,7 +516,7 @@ async def test_router_departure_revokes_grant_before_timeline_admission(
         previous_membership="join",
         membership="leave",
         previous_epoch=0,
-        transport=TransportKind(transport),
+        transport=transport,
         sequence=1,
     )
 
@@ -712,7 +607,7 @@ async def test_detached_router_invalidation_during_post_refresh_effects_revokes_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transport", ["classic", "sliding"])
+@pytest.mark.parametrize("transport", ["classic"])
 async def test_router_authoritative_departure_revokes_grant_before_membership_fence(
     tmp_path: Path,
     transport: str,
@@ -745,7 +640,7 @@ async def test_router_authoritative_departure_revokes_grant_before_membership_fe
         previous_membership="join",
         membership="leave",
         previous_epoch=0,
-        transport=TransportKind(transport),
+        transport=transport,
     )
     bot._before_ingestion_admission(admission)
 
@@ -758,7 +653,9 @@ async def test_router_authoritative_departure_revokes_grant_before_membership_fe
         generation=_CONSUMER_GENERATION,
         stream_id=_STREAM_ID,
     )
-    assert await principal.admit_ingestion_batch(admission) == _FRESH_RECEIPT_FACTS
+    assert (await principal.admit_ingestion_batch(IngestionBatchAdmission(_STREAM_ID, 1, (admission,)))).record_facts[
+        0
+    ] == _FRESH_RECEIPT_FACTS
 
     orchestrator.revoke_reply_authorized_calls.assert_awaited_once_with()
 
@@ -815,7 +712,7 @@ async def test_router_leave_then_rejoin_in_one_sync_requires_grant_refresh(tmp_p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transport", ["classic", "sliding"])
+@pytest.mark.parametrize("transport", ["classic"])
 async def test_router_final_invite_revokes_grant_before_timeline_admission(
     tmp_path: Path,
     transport: str,
@@ -845,7 +742,7 @@ async def test_router_final_invite_revokes_grant_before_timeline_admission(
         previous_membership="join",
         membership="invite",
         previous_epoch=0,
-        transport=TransportKind(transport),
+        transport=transport,
     )
 
     bot._before_ingestion_admission(admission)
@@ -856,7 +753,7 @@ async def test_router_final_invite_revokes_grant_before_timeline_admission(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transport", ["classic", "sliding"])
+@pytest.mark.parametrize("transport", ["classic"])
 @pytest.mark.parametrize("membership", ["leave", "ban", "invite"])
 async def test_grant_user_revocation_waits_for_durable_live_admission(
     tmp_path: Path,
@@ -894,7 +791,7 @@ async def test_grant_user_revocation_waits_for_durable_live_admission(
         bot,
         grant_room_id,
         member_event,
-        transport=TransportKind(transport),
+        transport=transport,
         sequence=0,
     )
 
@@ -918,7 +815,7 @@ async def test_grant_user_revocation_waits_for_durable_live_admission(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transport", ["classic", "sliding"])
+@pytest.mark.parametrize("transport", ["classic"])
 async def test_grant_user_join_waits_for_durable_timeline_admission(
     tmp_path: Path,
     transport: str,
@@ -945,7 +842,7 @@ async def test_grant_user_join_waits_for_durable_timeline_admission(
         bot,
         room_id,
         member_event,
-        transport=TransportKind(transport),
+        transport=transport,
         sequence=0,
     )
 
@@ -986,7 +883,7 @@ async def test_live_membership_replay_retries_an_unfinished_reconciliation(tmp_p
         bot,
         room_id,
         _departure_member_event("$join", user_id=sender_id, membership="join", ts=1),
-        transport=TransportKind.CLASSIC,
+        transport="classic",
         sequence=0,
     )
     orchestrator.revoke_reply_authorized_calls = AsyncMock(
@@ -1030,7 +927,7 @@ async def test_recovered_membership_does_not_change_live_reply_grants(tmp_path: 
         bot,
         room_id,
         _departure_member_event("$join", user_id=sender_id, membership="join", ts=1),
-        transport=TransportKind.CLASSIC,
+        transport="classic",
         sequence=0,
     )
 
@@ -1062,7 +959,7 @@ async def test_room_activity_tracks_fresh_receipts_and_ignores_unsettled_replay(
             "sender": "@alice:localhost",
             "type": "m.room.message",
         },
-        transport=TransportKind.CLASSIC,
+        transport="classic",
         sequence=0,
     )
 
@@ -1081,7 +978,7 @@ async def test_room_activity_tracks_fresh_receipts_and_ignores_unsettled_replay(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("transport", ["classic", "sliding"])
+@pytest.mark.parametrize("transport", ["classic"])
 @pytest.mark.parametrize("membership", ["leave", "ban"])
 async def test_grant_user_join_then_revoke_applies_in_durable_order(
     tmp_path: Path,
@@ -1110,14 +1007,14 @@ async def test_grant_user_join_then_revoke_applies_in_durable_order(
         bot,
         room_id,
         join_event,
-        transport=TransportKind(transport),
+        transport=transport,
         sequence=0,
     )
     revoke_admission = _validated_timeline_admission(
         bot,
         room_id,
         revoke_event,
-        transport=TransportKind(transport),
+        transport=transport,
         sequence=1,
     )
 
@@ -1145,7 +1042,7 @@ async def test_grant_user_join_then_revoke_applies_in_durable_order(
         bot,
         room_id,
         _departure_member_event("$later-join", user_id=sender_id, membership="join", ts=3),
-        transport=TransportKind(transport),
+        transport=transport,
         sequence=2,
     )
     await bot._after_ingestion_admission(
@@ -1334,10 +1231,14 @@ async def test_replayed_truncated_leave_cannot_fence_a_rejoined_membership(tmp_p
         stream_id=_STREAM_ID,
     )
 
-    assert await principal.admit_ingestion_batch(admission) == _FRESH_RECEIPT_FACTS
+    assert (await principal.admit_ingestion_batch(IngestionBatchAdmission(_STREAM_ID, 1, (admission,)))).record_facts[
+        0
+    ] == _FRESH_RECEIPT_FACTS
     await bot.journal_principal().note_membership_restarted(room_id)
     epoch_after_rejoin = await principal.membership_epoch(room_id)
-    assert await principal.admit_ingestion_batch(admission) == _REPLAY_FACTS
+    assert (await principal.admit_ingestion_batch(IngestionBatchAdmission(_STREAM_ID, 1, (admission,)))).record_facts[
+        0
+    ] == _REPLAY_FACTS
 
     assert await principal.membership_epoch(room_id) == epoch_after_rejoin
 
@@ -1371,9 +1272,15 @@ async def test_replayed_departure_cannot_leave_a_confirmed_join_fenced(tmp_path:
         stream_id=_STREAM_ID,
     )
 
-    assert await principal.admit_ingestion_batch(departure) == _FRESH_RECEIPT_FACTS
-    assert await principal.admit_ingestion_batch(departure) == _REPLAY_FACTS
-    assert await principal.admit_ingestion_batch(rejoin) == _FRESH_RECEIPT_FACTS
+    assert (await principal.admit_ingestion_batch(IngestionBatchAdmission(_STREAM_ID, 1, (departure,)))).record_facts[
+        0
+    ] == _FRESH_RECEIPT_FACTS
+    assert (await principal.admit_ingestion_batch(IngestionBatchAdmission(_STREAM_ID, 1, (departure,)))).record_facts[
+        0
+    ] == _REPLAY_FACTS
+    assert (await principal.admit_ingestion_batch(IngestionBatchAdmission(_STREAM_ID, 2, (rejoin,)))).record_facts[
+        0
+    ] == _FRESH_RECEIPT_FACTS
     epoch_after_rejoin = await principal.membership_epoch(room_id)
 
     assert await principal.membership_epoch(room_id) == epoch_after_rejoin

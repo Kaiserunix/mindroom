@@ -136,10 +136,12 @@ def _admit_ingestion_batch(
     admission: IngestionBatchAdmission,
 ) -> AdmissionFacts:
     """Apply one ingestion receipt with the interactive source snapshot it admits."""
-    facts = journal.admit_ingestion_batch(transaction, principal_id, admission)
-    if facts.receipt_new and admission.event is not None:
-        _snapshot_interactive_source(transaction, principal_id, admission.event)
-    return facts
+    return journal.admit_ingestion_batch(
+        transaction,
+        principal_id,
+        admission,
+        snapshot=_snapshot_interactive_source,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +179,7 @@ class PrincipalStore:
         self,
         admission: IngestionBatchAdmission,
     ) -> AdmissionFacts:
-        """Atomically persist one authenticated nio ingestion record."""
+        """Atomically persist one trusted nio batch."""
         return await self._backend.write(
             lambda tx: _admit_ingestion_batch(tx, self._principal_id, admission),
         )

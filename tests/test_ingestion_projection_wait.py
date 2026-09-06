@@ -7,26 +7,19 @@ import asyncio
 from contextlib import suppress
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
 import pytest
-from nio.ingest import RecordKind, TimelineEventProvenance
+from nio import TimelineEventProvenance
+from nio.durable import RecordKind, SyncBatch, SyncRecord
 
 from mindroom.event_journal import DeliveryStage
 from mindroom.matrix.durable_ingestion import run_ingestion_pump
 from mindroom.matrix_delivery import MatrixDeliveryWorker
 from tests.test_bot_ready_hook import _agent_bot
-from tests.test_durable_ingestion_admission import (
-    ACCOUNT_ID,
-    CONSUMER_GENERATION,
-    DEVICE_ID,
-    FRESH_FACTS,
-    ROOM_ID,
-    SENDER,
-    STREAM_ID,
-    _AdapterSession,
-    _batch_with,
-    _record_with,
-)
+from tests.test_durable_ingestion_admission import ACCOUNT as ACCOUNT_ID
+from tests.test_durable_ingestion_admission import ROOM as ROOM_ID
+from tests.test_durable_ingestion_admission import Session as _AdapterSession
 from tests.test_event_journal_store import (
     _interactive_selection_rows,
     admit,
@@ -39,9 +32,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from nio.ingest import SyncBatch
-
     from mindroom.event_journal import EventJournalStore, MatrixDelivery, PrincipalStore, ProjectedEvent
+
+
+CONSUMER_GENERATION = UUID(int=1)
+STREAM_ID = UUID(int=2)
+SENDER = "@alice:example.org"
 
 
 async def _projection_case(store: EventJournalStore) -> tuple[PrincipalStore, dict[str, object], SyncBatch]:
@@ -67,27 +63,28 @@ async def _projection_case(store: EventJournalStore) -> tuple[PrincipalStore, di
         edits_event_id="$prompt",
     )
     await principal.claim_matrix_delivery(delivery_id="$edit", stage=DeliveryStage.FINAL)
-    batch = _batch_with(
-        _record_with(
-            RecordKind.TIMELINE,
-            {
-                "type": "m.reaction",
-                "event_id": "$reaction",
-                "sender": SENDER,
-                "origin_server_ts": 3_000,
-                "content": {
-                    "m.relates_to": {
-                        "rel_type": "m.annotation",
-                        "event_id": "$prompt",
-                        "key": "1",
+    batch = SyncBatch(
+        STREAM_ID,
+        1,
+        (
+            SyncRecord(
+                RecordKind.TIMELINE,
+                ROOM_ID,
+                {
+                    "type": "m.reaction",
+                    "event_id": "$reaction",
+                    "sender": SENDER,
+                    "origin_server_ts": 3_000,
+                    "content": {
+                        "m.relates_to": {
+                            "rel_type": "m.annotation",
+                            "event_id": "$prompt",
+                            "key": "1",
+                        },
                     },
                 },
-            },
-            room_id=ROOM_ID,
-            membership_epoch=0,
-            room_sequence=0,
-            event_id="$reaction",
-            provenance=TimelineEventProvenance.RECOVERED,
+                provenance=TimelineEventProvenance.RECOVERED,
+            ),
         ),
     )
     return principal, edit, batch
@@ -125,7 +122,6 @@ async def test_pump_waits_for_projection_without_committing_or_spinning(  # noqa
             session,
             principal,
             account_id=ACCOUNT_ID,
-            device_id=DEVICE_ID,
             wait_for_work=wait_for_work,
             wake_semantic_dispatch=lambda: wakes.append(None),
             wait_for_delivery_projection=wait_for_projection,
@@ -145,19 +141,19 @@ async def test_pump_waits_for_projection_without_committing_or_spinning(  # noqa
             ),
         )
         assert frontier is not None
-        assert frontier["next_sequence"] == 0
+        assert frontier["next_sequence"] == 1
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         assert waits == 1
         assert len(session.next_calls) == 1
-        assert session.settlement_attempts == []
+        assert session.acked == []
         assert session.batch is batch
         if cancel:
             pumping.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(pumping, timeout=1)
             assert session.batch is batch
-            assert session.settlement_attempts == []
+            assert session.acked == []
             return
         await principal.acknowledge_matrix_delivery(
             delivery_id="$edit",
@@ -167,7 +163,7 @@ async def test_pump_waits_for_projection_without_committing_or_spinning(  # noqa
         )
         projected.set()
         await asyncio.wait_for(idle.wait(), timeout=2)
-        assert session.settlement_attempts == [(batch, FRESH_FACTS.receipt_new, FRESH_FACTS.semantic_event_new)]
+        assert session.acked == [batch]
         assert wakes == [None]
         selections = await _interactive_selection_rows(store)
         assert [(row["source_event_id"], row["revision_event_id"]) for row in selections] == [
@@ -271,7 +267,6 @@ async def test_projected_reaction_settles_while_unrelated_outbox_debt_keeps_retr
                 session,
                 principal,
                 account_id=ACCOUNT_ID,
-                device_id=DEVICE_ID,
                 wait_for_work=wait_for_work,
                 wake_semantic_dispatch=lambda: None,
                 wait_for_delivery_projection=bot._wait_for_delivery_projection,
@@ -280,7 +275,7 @@ async def test_projected_reaction_settles_while_unrelated_outbox_debt_keeps_retr
         try:
             await asyncio.wait_for(pass_done.wait(), timeout=2)
             await asyncio.wait_for(idle.wait(), timeout=0.5)
-            assert session.settlement_attempts == [(batch, True, True)]
+            assert session.acked == [batch]
             assert bot._delivery_recovery_task is not None
             assert not bot._delivery_recovery_task.done()
             assert not bot._delivery_recovery_wake.is_set()

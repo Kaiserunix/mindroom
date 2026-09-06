@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
-from uuid import UUID
 
 import nio
 import pytest
@@ -17,7 +16,7 @@ from mindroom.agent_reply_membership_sync import (
 from mindroom.config.main import Config
 from mindroom.event_journal import (
     DepartureSource,
-    IngestionBatchAdmission,
+    IngestionRecordAdmission,
     IngestionRecordDisposition,
 )
 from tests.conftest import test_runtime_paths
@@ -33,14 +32,8 @@ def _ingestion_admission(
     room_id: str | None = None,
     previous_membership: str | None = None,
     membership: str | None = None,
-) -> IngestionBatchAdmission:
-    return IngestionBatchAdmission(
-        schema_version=1,
-        consumer_generation=UUID(int=1),
-        stream_id=UUID(int=2),
-        sequence=0,
-        sha256=b"0" * 32,
-        record_id="record",
+) -> IngestionRecordAdmission:
+    return IngestionRecordAdmission(
         disposition=disposition,
         source=source,
         room_id=room_id,
@@ -124,7 +117,7 @@ def test_reported_control_departure_fences_room_before_admission(tmp_path: Path)
 )
 def test_non_reported_departure_carriers_do_not_change_reply_memberships(
     tmp_path: Path,
-    admission: IngestionBatchAdmission,
+    admission: IngestionRecordAdmission,
 ) -> None:
     """Non-departure carriers leave reply authorization unchanged."""
     memberships = MagicMock(spec=AgentReplyMembershipIndex)

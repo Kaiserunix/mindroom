@@ -70,7 +70,7 @@ main() entry
 
 - **Entity order**: Router first, then agents, then teams
 - **Room setup** (`_setup_rooms_and_memberships`): Router creates rooms, invites agents, teams, and users, then bots join
-- **Sync loops**: Each bot runs `sync_forever_with_restart()` with automatic retry; the default `matrix_sync.mode: classic` uses classic `/v3/sync` and `matrix_sync.mode: sliding` opts into MSC4186 Simplified Sliding Sync
+- **Sync loops**: Each bot runs `sync_forever_with_restart()` with automatic retry; `matrix_sync.mode: classic` uses Classic `/v3/sync`; Sliding configuration is rejected
 - **Internal user identity**: `mindroom_user.username` is the account-creation request; runtime authorization uses the persisted actual Matrix ID
 
 ## Session Storage Upgrades
@@ -110,7 +110,7 @@ The MCP manager callback schedules an orchestrator-owned background task so the 
 7. If responses never drain, either replacement flow stops deferring after 600 seconds and closes the gate over still-running responses.
    This bounded forced apply prevents a busy install from starving config or MCP replacement forever.
 8. For config reloads, `ConfigReloadLifecycle._update_config()` loads and validates the new config while admission remains open, then `build_config_update_plan()` computes targeted restarts and in-place reconciliations after the gate closes.
-9. The orchestrator applies the resulting plan: changed entities are replaced, unchanged bots receive the new config, and room-only changes reconcile memberships in place while restarting only sliding receive loops to refresh their subscriptions.
+9. The orchestrator applies the resulting plan: changed entities are replaced, unchanged bots receive the new config, and room-only changes reconcile memberships in place without restarting Classic receive loops.
    Call-enabled agents are conservatively replaced after any authored config change because active call tooling captures the full authored config snapshot.
 10. Removed entities run `cleanup()` to leave rooms and stop the bot.
 11. New and restarted bots go through room setup.

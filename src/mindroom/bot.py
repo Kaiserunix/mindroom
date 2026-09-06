@@ -165,15 +165,16 @@ if TYPE_CHECKING:
 
     import structlog
     from agno.agent import Agent
-    from nio.ingest.coordinator import _FrameCompletion, _OwnedIngestionSession
+    from nio.durable import DurableSync
 
     from mindroom.agent_reply_membership import AgentReplyMembershipIndex
     from mindroom.agent_reply_membership_sync import AgentReplyMembershipSync, ReplyMembershipPreAdmission
     from mindroom.coalescing_batch import PreparedTurn
     from mindroom.config.main import Config
     from mindroom.desktop.identity import DesktopControllerIdentity
-    from mindroom.event_journal import AdmissionFacts, IngestionBatchAdmission
+    from mindroom.event_journal import AdmissionFacts, IngestionRecordAdmission
     from mindroom.matrix.agent_message_snapshot import AgentMessageSnapshot
+    from mindroom.matrix.client_session import MindRoomAsyncClient
     from mindroom.matrix.identity import MatrixID
     from mindroom.matrix.media import MatrixMediaEvent
     from mindroom.response_admission import ResponseAdmissionGate
@@ -360,7 +361,7 @@ class AgentBot:
     _delivery_recovery_wake: asyncio.Event
     _delivery_projection_progress: asyncio.Event
     _delivery_recovery_task: asyncio.Task[None] | None
-    _ingestion_session: _OwnedIngestionSession | None
+    _ingestion_session: DurableSync | None
 
     # Shared runtime state and extracted collaborators
     _hook_registry_state: HookRegistryState
@@ -1256,7 +1257,7 @@ class AgentBot:
             message = "owned Matrix ingestion session is missing"
             raise PermanentMatrixStartupError(message)
         async with self._local_membership_lock:
-            await session._wait_for_local_membership_idle()
+            await session.wait_for_membership_idle()
             position = await self.journal_principal().membership_position(room_id)
             if type(position) is not RoomMembershipPosition:
                 message = "journal returned an invalid membership position"
@@ -1273,7 +1274,7 @@ class AgentBot:
                 ensure_ascii=True,
                 separators=(",", ":"),
             )
-            return await session._run_local_membership_transition(
+            return await session.change_membership(
                 operation_id=uuid5(
                     _LOCAL_MEMBERSHIP_OPERATION_NAMESPACE,
                     operation_name,
@@ -1338,14 +1339,9 @@ class AgentBot:
         self._deferred_stop_phase = None
         self._response_runner.resume_pending_admissions()
         self._calls_reconcile_pending = self._call_manager is not None
-        if self.agent_name == ROUTER_AGENT_NAME and self._router_reply_membership_sync.sync_loop_started():
+        if self.agent_name == ROUTER_AGENT_NAME:
             self._invalidate_agent_reply_memberships(reason="sync_loop_started")
         mark_matrix_sync_loop_started(self.agent_name)
-
-    def preserve_reply_memberships_on_next_sync_start(self) -> None:
-        """Carry the pre-sync authoritative snapshot into the first receive loop."""
-        if self.agent_name == ROUTER_AGENT_NAME:
-            self._router_reply_membership_sync.preserve_on_next_sync_start()
 
     @property
     def _router_reply_membership_sync(self) -> AgentReplyMembershipSync:
@@ -1474,7 +1470,7 @@ class AgentBot:
     def durable_ingestion_progress_generation(self) -> int | None:
         """Return nio's commit-gated progress generation for the owned session."""
         session = self._ingestion_session
-        return session._durable_progress_generation if session is not None else None
+        return session.progress_generation if session is not None else None
 
     def _mark_sync_progress(self) -> None:
         """Advance watchdog and health freshness from one sync progress event."""
@@ -1600,7 +1596,7 @@ class AgentBot:
         if effects.authorization_changed:
             self._schedule_reply_authorized_call_revocation()
 
-    def _before_ingestion_admission(self, admission: IngestionBatchAdmission) -> None:
+    def _before_ingestion_admission(self, admission: IngestionRecordAdmission) -> None:
         """Revoke uncertain control-room grants before admitting more work."""
         if self.agent_name == ROUTER_AGENT_NAME:
             self._apply_reply_membership_pre_admission(
@@ -1609,7 +1605,7 @@ class AgentBot:
 
     async def _after_ingestion_admission(
         self,
-        admission: IngestionBatchAdmission,
+        admission: IngestionRecordAdmission,
         facts: AdmissionFacts,
         timeline_provenance: nio.TimelineEventProvenance | None,
     ) -> None:
@@ -1631,7 +1627,7 @@ class AgentBot:
             assert isinstance(parsed, nio.RoomMemberEvent)
             await self._apply_live_reply_membership_transition(event.room_id, parsed)
 
-    async def _apply_ingestion_membership(self, admission: IngestionBatchAdmission) -> None:
+    async def _apply_ingestion_membership(self, admission: IngestionRecordAdmission) -> None:
         """Reconcile app state only while this admitted membership is still current."""
         room_id = admission.room_id
         assert room_id is not None
@@ -1724,9 +1720,8 @@ class AgentBot:
         if call_manager is not None:
             await call_manager.on_room_event(room, event)
 
-    async def _on_ingestion_frame_completion(self, completion: _FrameCompletion) -> None:
+    async def _on_ingestion_frame_completion(self) -> None:
         """Publish one fully settled source frame to the bot runtime."""
-        del completion
         first_sync_response = not self._first_sync_done
         self._mark_sync_progress()
         if self._sync_shutting_down:
@@ -1758,12 +1753,9 @@ class AgentBot:
             new_consumer_generation=uuid4(),
             config=bot_ingestion_config(
                 self.config,
-                agent_name=self.agent_name,
-                room_ids=self.rooms,
                 timeout_ms=_SYNC_TIMEOUT_MS,
                 sync_filter=_SYNC_FILTER,
             ),
-            completion_sink=self._on_ingestion_frame_completion,
         )
         self.client = opened.client
         self._ingestion_session = opened.session
@@ -2078,8 +2070,6 @@ class AgentBot:
         self.last_sync_time = None
         self._last_sync_monotonic = None
         self._first_sync_done = False
-        if self.agent_name == ROUTER_AGENT_NAME and self._reply_membership_sync is not None:
-            self._reply_membership_sync.reset_receive_generation()
         self._orchestrator_ready_handled = False
         clear_matrix_sync_state(self.agent_name)
         await self._emit_agent_lifecycle_event(EVENT_AGENT_STOPPED, stop_reason=shutdown_intent.stop_reason)
@@ -2359,10 +2349,10 @@ class AgentBot:
         self._matrix_ingestion_quiesce_requested = True
         session = self._ingestion_session
         if session is not None:
-            await session._quiesce()
+            await session.quiesce()
 
     async def sync_forever(self) -> None:
-        """Run the owned durable source and one-record admission pump together."""
+        """Run the owned durable source and batch admission pump together."""
         client = self.client
         session = self._ingestion_session
         assert client is not None
@@ -2383,12 +2373,16 @@ class AgentBot:
                 session,
                 self.journal_principal(),
                 account_id=self.matrix_id.full_id,
-                device_id=device_id,
-                wait_for_work=session._wait_for_work,
+                wait_for_work=session.wait_for_work,
                 wake_semantic_dispatch=self._journal_dispatcher.wake,
                 wait_for_delivery_projection=self._wait_for_delivery_projection,
                 before_admission=self._before_ingestion_admission,
                 after_admission=self._after_ingestion_admission,
+                after_sync=self._on_ingestion_frame_completion,
+                authenticate_to_device=lambda source, event: cast("MindRoomAsyncClient", client).authenticate_to_device(
+                    source,
+                    event,
+                ),
                 schedule_trigger_sender_is_managed=self._ingress_validator.sender_is_trusted_for_ingress_metadata,
             ),
             name=f"matrix_ingestion_pump_{self.agent_name}",

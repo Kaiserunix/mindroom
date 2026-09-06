@@ -13,7 +13,7 @@ noticed.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 from uuid import UUID
@@ -42,6 +42,7 @@ from .models import (
     IngestionBatchSequenceError,
     IngestionBatchValidationError,
     IngestionConsumerBindingError,
+    IngestionRecordAdmission,
     IngestionRecordDisposition,
     JournalEvent,
     PendingPage,
@@ -72,25 +73,28 @@ _REPAIRED_RECOVERY_STATE = "repaired"
 _MATRIX_MEMBERSHIPS = frozenset({"ban", "invite", "join", "knock", "leave"})
 
 
-def validate_ingestion_batch_admission(  # noqa: PLR0915 - exact XOR grammar
-    admission: object,
-) -> None:
-    """Reject any carrier outside the exact durable-admission grammar."""
-    invalid = IngestionBatchValidationError("Invalid ingestion batch admission")
-    if type(admission) is not IngestionBatchAdmission:
-        raise invalid
+def validate_ingestion_batch_admission(admission: IngestionBatchAdmission) -> None:
+    """Check sequence and application effects at the journal boundary."""
+    if (
+        not isinstance(admission, IngestionBatchAdmission)
+        or not isinstance(admission.stream_id, UUID)
+        or type(admission.sequence) is not int
+        or not 1 <= admission.sequence <= 2**63 - 2
+    ):
+        message = "Invalid batch sequence or stream"
+        raise IngestionBatchValidationError(message)
+    for record in admission.records:
+        _validate_ingestion_record(record)
+
+
+def _validate_ingestion_record(item: IngestionRecordAdmission) -> None:  # noqa: PLR0915 - application effect grammar
+    invalid = IngestionBatchValidationError("Invalid ingestion record admission")
 
     def require(condition: object) -> None:
         if not condition:
             raise invalid
 
-    item = admission
-    schema, sequence = item.schema_version, item.sequence
-    require(type(schema) is type(sequence) is int)
-    require(schema == 1 and 0 <= sequence <= 2**63 - 2)
-    require(type(item.consumer_generation) is type(item.stream_id) is UUID)
-    require(type(item.sha256) is bytes and len(item.sha256) == 32)
-    require(type(item.record_id) is str and bool(item.record_id))
+    require(isinstance(item, IngestionRecordAdmission))
     require(type(item.disposition) is IngestionRecordDisposition)
 
     effect = item.disposition
@@ -272,7 +276,7 @@ def _apply_semantic_ingestion_disposition(
 def _apply_ingestion_disposition(
     transaction: Transaction,
     principal_id: str,
-    admission: IngestionBatchAdmission,
+    admission: IngestionRecordAdmission,
 ) -> bool:
     """Apply one validated record effect, returning whether it dispatches."""
     disposition = admission.disposition
@@ -328,43 +332,44 @@ def admit_ingestion_batch(
     transaction: Transaction,
     principal_id: str,
     admission: IngestionBatchAdmission,
+    *,
+    snapshot: Callable[[Transaction, str, InboundEvent], None],
 ) -> AdmissionFacts:
-    """Atomically claim and persist one authenticated ingestion record."""
+    """Apply every disposition and its receipt in one caller-owned transaction."""
     validate_ingestion_batch_admission(admission)
-    generation, stream = str(admission.consumer_generation), str(admission.stream_id)
-    row = transaction.fetchone("UPDATE matrix_sync_consumers SET next_sequence = next_sequence + 1 WHERE principal_id = ? AND consumer_generation = ? AND stream_id = ? AND next_sequence = ? AND next_sequence < 9223372036854775807 RETURNING consumer_generation, stream_id, next_sequence", (principal_id, generation, stream, admission.sequence))  # fmt: skip
-    if row is None:
-        state = transaction.fetchone("SELECT c.consumer_generation AS c_generation, c.stream_id AS c_stream, c.next_sequence AS c_next, r.schema_version AS r_schema, r.batch_sha256 AS r_sha256, r.record_id AS r_record_id FROM matrix_sync_consumers AS c LEFT JOIN matrix_ingestion_receipts AS r ON r.principal_id = c.principal_id AND r.consumer_generation = c.consumer_generation AND r.stream_id = c.stream_id AND r.sequence = ? WHERE c.principal_id = ?", (admission.sequence, principal_id))  # fmt: skip
-        if state is None:
-            raise IngestionConsumerBindingError
-        owner = state["c_generation"], state["c_stream"]
-        if tuple(map(type, owner)) != (str, str) or owner != (generation, stream):
-            raise IngestionConsumerBindingError
-        frontier = state["c_next"]
-        if type(frontier) is not int or not 0 <= frontier <= 2**63 - 1:
-            raise IngestionBatchIntegrityError
-        if admission.sequence == frontier - 1:
-            receipt = state["r_schema"], state["r_sha256"], state["r_record_id"]
-            expected = 1, admission.sha256.hex(), admission.record_id
-            if tuple(map(type, receipt)) != (int, str, str) or receipt != expected:
-                raise IngestionBatchIntegrityError
-            return AdmissionFacts(receipt_new=False, semantic_event_new=False)
-        if admission.sequence < frontier - 1 or admission.sequence > frontier:
-            raise IngestionBatchSequenceError
-        raise IngestionBatchIntegrityError
-    owner = row["consumer_generation"], row["stream_id"]
-    if not all(type(value) is str for value in owner) or owner != (generation, stream):
-        raise IngestionConsumerBindingError
-    next_sequence = row["next_sequence"]
-    if type(next_sequence) is not int or next_sequence != admission.sequence + 1:
-        raise IngestionBatchIntegrityError
-    semantic_event_new = _apply_ingestion_disposition(
-        transaction,
-        principal_id,
-        admission,
+    stream = str(admission.stream_id)
+    row = transaction.fetchone(
+        "UPDATE matrix_sync_consumers SET next_sequence = next_sequence + 1 "
+        "WHERE principal_id = ? AND stream_id = ? AND next_sequence = ? "
+        "RETURNING next_sequence",
+        (principal_id, stream, admission.sequence),
     )
-    transaction.execute("INSERT INTO matrix_ingestion_receipts (principal_id, consumer_generation, stream_id, sequence, schema_version, batch_sha256, record_id) VALUES (?, ?, ?, ?, 1, ?, ?)", (principal_id, generation, stream, admission.sequence, admission.sha256.hex(), admission.record_id))  # fmt: skip
-    return AdmissionFacts(receipt_new=True, semantic_event_new=semantic_event_new)
+    if row is None:
+        state = transaction.fetchone(
+            "SELECT c.stream_id, c.next_sequence, r.sequence AS receipt "
+            "FROM matrix_sync_consumers AS c LEFT JOIN matrix_ingestion_receipts AS r "
+            "ON r.principal_id = c.principal_id AND r.stream_id = c.stream_id AND r.sequence = ? "
+            "WHERE c.principal_id = ?",
+            (admission.sequence, principal_id),
+        )
+        if state is None or state["stream_id"] != stream:
+            raise IngestionConsumerBindingError
+        if admission.sequence != state["next_sequence"] - 1:
+            raise IngestionBatchSequenceError
+        if state["receipt"] is None:
+            raise IngestionBatchIntegrityError
+        return AdmissionFacts(False, False, tuple(AdmissionFacts(False, False) for _ in admission.records))
+    facts = []
+    for record in admission.records:
+        semantic_new = _apply_ingestion_disposition(transaction, principal_id, record)
+        if record.event is not None:
+            snapshot(transaction, principal_id, record.event)
+        facts.append(AdmissionFacts(True, semantic_new))
+    transaction.execute(
+        "INSERT INTO matrix_ingestion_receipts (principal_id, stream_id, sequence) VALUES (?, ?, ?)",
+        (principal_id, stream, admission.sequence),
+    )
+    return AdmissionFacts(True, any(f.semantic_event_new for f in facts), tuple(facts))
 
 
 def store_generation(transaction: Transaction, *, new_generation: str) -> str:

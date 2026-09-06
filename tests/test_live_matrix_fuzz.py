@@ -2179,7 +2179,6 @@ def test_sustained_stream_capacity_config_uses_managed_sender_and_synthetic_resp
 
         assert config["matrix_sync"] == {
             "mode": "sliding",
-            "sliding_timeline_limit": 100,
         }
         assert config["agents"]["general"]["model"] == "synthetic"
         assert config["agents"]["load_sender"]["rooms"] == ["lobby"]

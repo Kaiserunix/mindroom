@@ -14,16 +14,12 @@ import pytest
 from agno.models.ollama import Ollama
 from agno.run.agent import RunContentEvent
 from agno.run.team import TeamRunOutput
-from nio.ingest.config import ClassicSourceConfig, SlidingSourceConfig
-from nio.ingest.model import TransportKind
-from nio.store._sync_journal_values import _FrameCompletion
+from nio.durable import DurableSyncConfig
 
-from mindroom import bot as bot_module
 from mindroom.bot import AgentBot
 from mindroom.config.access import ResponderAccessConfig
 from mindroom.config.agent import AgentConfig, AgentPrivateConfig
 from mindroom.config.main import Config
-from mindroom.config.matrix import MatrixSyncConfig
 from mindroom.config.models import ModelConfig, RouterConfig
 from mindroom.constants import (
     ROUTER_AGENT_NAME,
@@ -32,6 +28,7 @@ from mindroom.conversation_resolver import MessageContext
 from mindroom.event_journal import (
     DepartureSource,
     IngestionBatchAdmission,
+    IngestionRecordAdmission,
     IngestionRecordDisposition,
     RoomMembershipPosition,
 )
@@ -129,54 +126,16 @@ def test_agent_bot_requires_reply_membership_index(
         bot_constructor(mock_agent_user, tmp_path, config=config, runtime_paths=runtime_paths_for(config))
 
 
-@pytest.mark.parametrize("mode", ["classic", "sliding"])
-def test_bot_ingestion_config_freezes_existing_transport_settings(
-    mode: str,
-    tmp_path: Path,
-) -> None:
-    """Owned source settings must exactly mirror the pre-cutover bot loop."""
-    config = _runtime_bound_config(
-        Config(matrix_sync=MatrixSyncConfig(mode=mode, sliding_timeline_limit=7)),
-        tmp_path,
-    )
-
+def test_bot_ingestion_config_freezes_existing_transport_settings(tmp_path: Path) -> None:
+    """Classic sync retains configured timeout and filter."""
+    config = _runtime_bound_config(Config(), tmp_path)
     ingestion = bot_ingestion_config(
         config,
-        agent_name="general",
-        room_ids=["!joined:localhost", "#alias:localhost"],
         timeout_ms=30_000,
         sync_filter={"room": {"timeline": {"limit": 50}}},
     )
-
-    if mode == "classic":
-        assert ingestion.source == ClassicSourceConfig(
-            timeout_ms=30_000,
-            filter_json=b'{"room":{"timeline":{"limit":50}}}',
-        )
-        return
-    assert ingestion.source == SlidingSourceConfig(
-        timeout_ms=30_000,
-        connection_name="mindroom-general",
-        lists_json=(
-            b'{"mindroom":{"ranges":[[0,99]],"required_state":'
-            b'[["m.room.create",""],["m.room.name",""],["m.room.topic",""],'
-            b'["m.room.avatar",""],["m.room.encryption",""],["m.room.member","$LAZY"]],'
-            b'"timeline_limit":7}}'
-        ),
-        room_subscriptions_json=(
-            b'{"!joined:localhost":{"required_state":'
-            b'[["m.room.create",""],["m.room.name",""],["m.room.topic",""],'
-            b'["m.room.avatar",""],["m.room.encryption",""],["m.room.member","$LAZY"]],'
-            b'"timeline_limit":7}}'
-        ),
-        extensions_json=(b'{"account_data":{"enabled":true},"e2ee":{"enabled":true},"to_device":{"enabled":true}}'),
-    )
-
-
-def test_owned_source_poll_fits_the_clean_restart_budget() -> None:
-    """One final quiesce poll must leave time to boot inside the 15-second gate."""
-    assert bot_module._SYNC_TIMEOUT_MS == 5_000
-    assert bot_module._SYNC_TIMEOUT_MS < 15_000
+    assert ingestion.sync_timeout_ms == 30_000
+    assert ingestion.sync_filter == {"room": {"timeline": {"limit": 50}}}
 
 
 class TestAgentBot(AgentBotTestBase):
@@ -329,11 +288,10 @@ class TestAgentBot(AgentBotTestBase):
         login_kwargs = mock_login.await_args.kwargs
         assert login_kwargs["consumer_store"] == bot.journal_principal()
         assert type(login_kwargs["new_consumer_generation"]) is UUID
-        assert login_kwargs["completion_sink"] == bot._on_ingestion_frame_completion
         ingestion_config = login_kwargs["config"]
-        assert type(ingestion_config.source) is ClassicSourceConfig
-        assert ingestion_config.source.timeout_ms == 5_000
-        assert ingestion_config.source.filter_json == b'{"room":{"timeline":{"limit":5000}}}'
+        assert isinstance(ingestion_config, DurableSyncConfig)
+        assert ingestion_config.sync_timeout_ms == 5_000
+        assert ingestion_config.sync_filter == {"room": {"timeline": {"limit": 5000}}}
         # The owned ingestion pump is the sole durable source owner. The
         # public client keeps only compatibility callbacks; it must not retain
         # either of the superseded public sync/admission engines.
@@ -576,7 +534,7 @@ class TestAgentBot(AgentBotTestBase):
         wait_for_work = AsyncMock()
         ingestion_session = SimpleNamespace(
             run=AsyncMock(side_effect=run_owned),
-            _wait_for_work=wait_for_work,
+            wait_for_work=wait_for_work,
         )
         mock_login.return_value = _owned_login(mock_client, ingestion_session)
         mock_ensure_user.return_value = None
@@ -590,7 +548,8 @@ class TestAgentBot(AgentBotTestBase):
             admission: object,
             *,
             account_id: str,
-            device_id: str,
+            after_sync: object,
+            authenticate_to_device: object,
             wait_for_work: object,
             wake_semantic_dispatch: object,
             wait_for_delivery_projection: object,
@@ -598,6 +557,8 @@ class TestAgentBot(AgentBotTestBase):
             after_admission: object,
             schedule_trigger_sender_is_managed: object,
         ) -> None:
+            assert after_sync == bot._on_ingestion_frame_completion
+            assert callable(authenticate_to_device)
             assert before_admission == bot._before_ingestion_admission
             assert wait_for_delivery_projection == bot._wait_for_delivery_projection
             assert after_admission == bot._after_ingestion_admission
@@ -607,7 +568,6 @@ class TestAgentBot(AgentBotTestBase):
                     session,
                     admission,
                     account_id,
-                    device_id,
                     wait_for_work,
                     wake_semantic_dispatch,
                 ),
@@ -646,7 +606,6 @@ class TestAgentBot(AgentBotTestBase):
                     ingestion_session,
                     bot.journal_principal(),
                     mock_agent_user.user_id,
-                    "DEVICEID",
                     wait_for_work,
                     bot._journal_dispatcher.wake,
                 ),
@@ -684,30 +643,14 @@ class TestAgentBot(AgentBotTestBase):
         bot._ingestion_session = SimpleNamespace(next_batch=next_batch)
         assert next_batch() is None
         next_batch.reset_mock()
-        first = _FrameCompletion(
-            UUID("10000000-0000-4000-8000-000000000001"),
-            TransportKind.CLASSIC,
-            0,
-            0,
-            1,
-            2,
-        )
-        second = _FrameCompletion(
-            UUID("10000000-0000-4000-8000-000000000002"),
-            TransportKind.CLASSIC,
-            0,
-            1,
-            3,
-            4,
-        )
 
-        await bot._on_ingestion_frame_completion(first)
+        await bot._on_ingestion_frame_completion()
         next_batch.assert_not_called()
         assert bot._first_sync_done is True
         bot._run_sync_response_side_effects.assert_awaited_once_with(
             first_sync_response=True,
         )
-        await bot._on_ingestion_frame_completion(second)
+        await bot._on_ingestion_frame_completion()
         assert bot._mark_sync_progress.call_count == 2
         assert bot._run_sync_response_side_effects.await_args_list == [
             call(first_sync_response=True),
@@ -750,7 +693,7 @@ class TestAgentBot(AgentBotTestBase):
 
         session = SimpleNamespace(
             run=AsyncMock(side_effect=run_owned),
-            _wait_for_work=AsyncMock(),
+            wait_for_work=AsyncMock(),
         )
         bot._ingestion_session = session
         admission = object()
@@ -807,7 +750,7 @@ class TestAgentBot(AgentBotTestBase):
 
         session = SimpleNamespace(
             run=AsyncMock(side_effect=run_owned),
-            _wait_for_work=AsyncMock(),
+            wait_for_work=AsyncMock(),
         )
         bot._ingestion_session = session
         bot.journal_principal = MagicMock(return_value=object())
@@ -859,8 +802,8 @@ class TestAgentBot(AgentBotTestBase):
             membership_position=AsyncMock(side_effect=(leave, leave, join)),
         )
         session = SimpleNamespace(
-            _wait_for_local_membership_idle=AsyncMock(),
-            _run_local_membership_transition=AsyncMock(return_value=True),
+            wait_for_membership_idle=AsyncMock(),
+            change_membership=AsyncMock(return_value=True),
         )
         bot.journal_principal = MagicMock(return_value=principal)
         bot._ingestion_session = session
@@ -870,7 +813,7 @@ class TestAgentBot(AgentBotTestBase):
         assert await bot._change_local_membership(room_id, "join") is True
 
         operation_id = UUID("1ffbf4c2-3f57-50dc-9dd1-5f0e76fad4e8")
-        assert session._run_local_membership_transition.await_args_list == [
+        assert session.change_membership.await_args_list == [
             call(
                 operation_id=operation_id,
                 room_id=room_id,
@@ -886,7 +829,7 @@ class TestAgentBot(AgentBotTestBase):
                 current_membership="join",
             ),
         ]
-        assert session._wait_for_local_membership_idle.await_count == 3
+        assert session.wait_for_membership_idle.await_count == 3
         assert principal.membership_position.await_args_list == [
             call(room_id),
             call(room_id),
@@ -931,21 +874,21 @@ class TestAgentBot(AgentBotTestBase):
             )
             facts = await principal.admit_ingestion_batch(
                 IngestionBatchAdmission(
-                    schema_version=1,
-                    consumer_generation=generation,
-                    stream_id=stream_id,
-                    sequence=sequence,
-                    sha256=bytes([sequence + 1]) * 32,
-                    record_id=f"reported-membership-{sequence}",
-                    disposition=IngestionRecordDisposition.ROOM_LIFECYCLE,
-                    source=source,
-                    room_id=room_id,
-                    previous_membership=previous_membership,
-                    membership=membership,
-                    previous_membership_epoch=previous_epoch,
-                    membership_epoch=membership_epoch,
-                    event=None,
-                    projected=None,
+                    stream_id,
+                    sequence + 1,
+                    (
+                        IngestionRecordAdmission(
+                            disposition=IngestionRecordDisposition.ROOM_LIFECYCLE,
+                            source=source,
+                            room_id=room_id,
+                            previous_membership=previous_membership,
+                            membership=membership,
+                            previous_membership_epoch=previous_epoch,
+                            membership_epoch=membership_epoch,
+                            event=None,
+                            projected=None,
+                        ),
+                    ),
                 ),
             )
             assert facts.receipt_new is True
@@ -973,8 +916,8 @@ class TestAgentBot(AgentBotTestBase):
             return True
 
         session = SimpleNamespace(
-            _wait_for_local_membership_idle=AsyncMock(),
-            _run_local_membership_transition=AsyncMock(side_effect=publish_transition),
+            wait_for_membership_idle=AsyncMock(),
+            change_membership=AsyncMock(side_effect=publish_transition),
         )
         bot._ingestion_session = session
         owned_journal = bot._own_journal
@@ -989,7 +932,7 @@ class TestAgentBot(AgentBotTestBase):
             )
             assert await bot._change_local_membership(room_id, "leave") is True
 
-            assert session._run_local_membership_transition.await_args_list == [
+            assert session.change_membership.await_args_list == [
                 call(
                     operation_id=UUID("2f65b9a7-fcc7-5025-b653-f6f147bad131"),
                     room_id=room_id,
@@ -1009,7 +952,7 @@ class TestAgentBot(AgentBotTestBase):
                 "leave",
                 2,
             )
-            assert session._wait_for_local_membership_idle.await_count == 2
+            assert session.wait_for_membership_idle.await_count == 2
         finally:
             await owned_journal.close()
 

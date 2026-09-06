@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from mindroom.event_journal import (
     DepartureSource,
-    IngestionBatchAdmission,
+    IngestionRecordAdmission,
     IngestionRecordDisposition,
 )
 
@@ -42,7 +42,6 @@ class AgentReplyMembershipSync:
         self._refresh_pending = False
         self._refresh_attempt = 0
         self._refresh_retry_at = 0.0
-        self._preserve_on_next_sync_start = False
         self._live_transition_lock = asyncio.Lock()
         self._live_effects_pending = False
         self._revocation_wave_issued = False
@@ -51,22 +50,6 @@ class AgentReplyMembershipSync:
     def memberships(self) -> AgentReplyMembershipIndex:
         """Return the shared atomic index controlled by this sync lifecycle."""
         return self._memberships
-
-    def preserve_on_next_sync_start(self) -> None:
-        """Carry a pre-sync authoritative snapshot into exactly one receive loop."""
-        self._preserve_on_next_sync_start = True
-
-    def sync_loop_started(self) -> bool:
-        """Return whether a new receive generation must invalidate its snapshot."""
-        preserve = self._preserve_on_next_sync_start
-        self._preserve_on_next_sync_start = False
-        if preserve:
-            self._request_refresh()
-        return not preserve
-
-    def reset_receive_generation(self) -> None:
-        """Forget one stopped receive generation's preservation state."""
-        self._preserve_on_next_sync_start = False
 
     def _request_refresh(self) -> None:
         """Request an authoritative rebuild."""
@@ -118,7 +101,7 @@ class AgentReplyMembershipSync:
         self,
         config: Config,
         runtime_paths: RuntimePaths,
-        admission: IngestionBatchAdmission,
+        admission: IngestionRecordAdmission,
     ) -> ReplyMembershipPreAdmission:
         """Fence uncertainty and reported control departures before admission."""
         if admission.disposition is IngestionRecordDisposition.HISTORY_LOSS:

@@ -56,7 +56,7 @@ _TABLES = (
         principal_id TEXT NOT NULL PRIMARY KEY,
         consumer_generation TEXT NOT NULL,
         stream_id TEXT UNIQUE,
-        next_sequence BIGINT NOT NULL DEFAULT 0
+        next_sequence BIGINT NOT NULL DEFAULT 1
             CHECK (next_sequence >= 0 AND next_sequence <= 9223372036854775807)
     )
     """,
@@ -83,13 +83,9 @@ _TABLES = (
     """
     CREATE TABLE IF NOT EXISTS matrix_ingestion_receipts (
         principal_id TEXT NOT NULL,
-        consumer_generation TEXT NOT NULL,
         stream_id TEXT NOT NULL,
-        sequence BIGINT NOT NULL CHECK (sequence >= 0 AND sequence <= 9223372036854775806),
-        schema_version BIGINT NOT NULL CHECK (schema_version = 1),
-        batch_sha256 TEXT NOT NULL CHECK (length(batch_sha256) = 64),
-        record_id TEXT NOT NULL CHECK (length(record_id) > 0),
-        PRIMARY KEY (principal_id, consumer_generation, stream_id, sequence)
+        sequence BIGINT NOT NULL CHECK (sequence >= 1 AND sequence <= 9223372036854775806),
+        PRIMARY KEY (principal_id, stream_id, sequence)
     )
     """,
     """

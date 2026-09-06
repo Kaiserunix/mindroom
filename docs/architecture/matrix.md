@@ -87,15 +87,13 @@ Use `build_message_content()` from `message_builder.py` to construct thread-awar
 
 Each agent bot runs an owned Nio ingestion session with a five-second long-polling timeout.
 The default `matrix_sync.mode: classic` streams events through classic `/v3/sync` and backfills limited-timeline gaps from `/messages`.
-Set `matrix_sync.mode: sliding` to opt into MSC4186 Simplified Sliding Sync on homeservers that advertise `org.matrix.simplified_msc3575`.
-`matrix_sync.sliding_timeline_limit` (default 100) bounds the per-room timeline window of each sliding request.
-Nio owns transport cursors, crypto preparation, and persisted per-event provenance for both sync transports.
-Sliding Sync classifies its validated `num_live` tail as live, ordinary continuations without `num_live` as live, and initial or expanded timelines without `num_live` as history.
+Only Classic sync is supported; explicit Sliding configuration is rejected.
+Nio owns transport cursors, crypto preparation, and persisted per-event provenance.
 Classic Sync distinguishes initial history, live continuations, and recovered gaps; MindRoom uses the provenance Nio supplies without reclassifying it.
 This provenance remains attached across recovery, restart, and decryption independently of journal checkpoint persistence.
-`matrix/durable_ingestion.py` validates one immutable Nio batch and atomically commits its receipt, membership effects, semantic event, and conversation projection in the MindRoom journal before acknowledging that batch to Nio.
+`matrix/durable_ingestion.py` converts one trusted Nio batch and atomically commits its receipt, ordered membership effects, semantic events, and conversation projection in the MindRoom journal before acknowledging that batch to Nio.
 An admission failure leaves the batch unsettled for retry, and replay after a committed admission returns the original receipt without duplicating semantic work.
-Typing and presence remain fresh best-effort notifications outside durable work; read receipts still pass through durable ingestion.
+Typing, presence and read receipts are excluded from durable admission.
 The development lock pins the accompanying Nio implementation to the exact revision in `tool.uv.sources` in `pyproject.toml`.
 Admission is fail-closed at every provenance, not only for recovery, because an event the journal never accepted is one no later process would see again.
 Silent schedules use the custom `io.mindroom.scheduled.trigger` timeline event so clients do not render the task body as a room message.

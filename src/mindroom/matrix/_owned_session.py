@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, Protocol
 from uuid import UUID
 
 import nio
-from nio.ingest.coordinator import _open_owned_ingestion
-from nio.ingest.errors import _MarkedStoreRequiresSqlite
-from nio.store.database import DefaultStore, SqliteStore
-from nio.store.sync_journal import (
-    StoreBootstrap,
-    _open_configured_ingestion_store,
-    _open_fresh_ingestion_store,
-)
+from nio.durable import DurableSync, DurableSyncConfig, open_durable_sync
+from nio.store.database import DefaultStore
 
 from mindroom.event_journal.models import IngestionConsumer
 from mindroom.logging_config import get_logger
@@ -28,11 +22,7 @@ from mindroom.matrix.client_session import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
-    from pathlib import Path
-
-    from nio.ingest.config import IngestionConfig
-    from nio.ingest.coordinator import _FrameCompletion, _OwnedIngestionSession
+    from collections.abc import Mapping
 
     from mindroom.constants import RuntimePaths
 
@@ -79,80 +69,12 @@ class OwnedMatrixSession:
     """One authenticated client and its separately owned ingestion session."""
 
     client: nio.AsyncClient
-    session: _OwnedIngestionSession
+    session: DurableSync
     consumer: IngestionConsumer
 
 
 def _raise_owned_factory_value_error(message: str) -> NoReturn:
     raise ValueError(message)
-
-
-def _open_owned_store_bootstrap(
-    store_path: Path,
-    *,
-    database_name: str,
-    account_id: str,
-    device_id: str,
-    consumer_generation: UUID,
-    config: IngestionConfig,
-    pickle_key: str,
-) -> StoreBootstrap:
-    """Open one fresh, legacy-adoption, or typed marked-reopen bootstrap."""
-    database_path = store_path / database_name
-    if not database_path.is_file() or database_path.stat().st_size == 0:
-        return _open_fresh_ingestion_store(
-            store_path,
-            account_id=account_id,
-            device_id=device_id,
-            consumer_generation=consumer_generation,
-            source=config.source,
-            pickle_key=pickle_key,
-            database_name=database_name,
-            sqlite_busy_timeout_ms=config.sqlite_busy_timeout_ms,
-        )
-    try:
-        return _open_configured_ingestion_store(
-            store_path,
-            source_store_class=DefaultStore,
-            owned_store_class=SqliteStore,
-            account_id=account_id,
-            device_id=device_id,
-            consumer_generation=consumer_generation,
-            source=config.source,
-            pickle_key=pickle_key,
-            database_name=database_name,
-            sqlite_busy_timeout_ms=config.sqlite_busy_timeout_ms,
-        )
-    except _MarkedStoreRequiresSqlite:
-        return _open_configured_ingestion_store(
-            store_path,
-            source_store_class=SqliteStore,
-            owned_store_class=SqliteStore,
-            account_id=account_id,
-            device_id=device_id,
-            consumer_generation=consumer_generation,
-            source=config.source,
-            pickle_key=pickle_key,
-            database_name=database_name,
-            sqlite_busy_timeout_ms=config.sqlite_busy_timeout_ms,
-        )
-
-
-async def _cleanup_failed_owned_matrix_open(
-    bootstrap: StoreBootstrap | None,
-    client: nio.AsyncClient | None,
-) -> None:
-    """Run every pre-transfer cleanup lane while preserving the primary error."""
-    if bootstrap is not None:
-        try:
-            bootstrap.close()
-        except BaseException:
-            logger.exception("owned_matrix_bootstrap_cleanup_failed")
-    if client is not None:
-        try:
-            await client.close()
-        except BaseException:
-            logger.exception("owned_matrix_http_cleanup_failed")
 
 
 def _create_credential_client(
@@ -242,9 +164,8 @@ async def open_owned_matrix_session(
     *,
     consumer_store: IngestionConsumerStore,
     new_consumer_generation: UUID,
-    config: IngestionConfig,
+    config: DurableSyncConfig,
     http_headers: Mapping[str, str] | None = None,
-    completion_sink: Callable[[_FrameCompletion], Awaitable[None]] | None = None,
 ) -> OwnedMatrixSession:
     """Bind one durable consumer and transfer one exact owned Matrix store."""
     runtime_paths = require_runtime_paths_arg(runtime_paths)
@@ -268,53 +189,44 @@ async def open_owned_matrix_session(
 
     store_path = olm_store_dir(credentials.user_id, runtime_paths)
     database_name = f"{credentials.user_id}_{credentials.device_id}.db"
-    client_config = replace(
-        matrix_client_config(http_headers=http_headers),
-        store=SqliteStore,
+    client = MindRoomAsyncClient(
+        homeserver,
+        credentials.user_id,
+        device_id=credentials.device_id,
+        store_path=None,
+        config=matrix_client_config(http_headers=http_headers),
+        ssl=maybe_ssl_context(homeserver, runtime_paths=runtime_paths),
     )
-    bootstrap = None
-    client: nio.AsyncClient | None = None
+    client.user_id = credentials.user_id
+    client.device_id = credentials.device_id
+    client.access_token = credentials.access_token
+    session = None
     try:
-        bootstrap = _open_owned_store_bootstrap(
-            store_path,
+        session = open_durable_sync(
+            client,
+            consumer_id=consumer.generation,
+            store_path=store_path,
             database_name=database_name,
-            account_id=credentials.user_id,
-            device_id=credentials.device_id,
-            consumer_generation=consumer.generation,
             config=config,
-            pickle_key=client_config.pickle_key,
+            source_store_class=DefaultStore,
         )
-
         bound_consumer = await consumer_store.bind_ingestion_stream(
             generation=consumer.generation,
-            stream_id=bootstrap.stream_id,
+            stream_id=session.stream_id,
         )
-        if bound_consumer != IngestionConsumer(
-            consumer.generation,
-            bootstrap.stream_id,
-        ):
+        if bound_consumer != IngestionConsumer(consumer.generation, session.stream_id):
             _raise_owned_factory_value_error("ingestion stream binding is invalid")
-
-        client = MindRoomAsyncClient(
-            homeserver,
-            credentials.user_id,
-            device_id=credentials.device_id,
-            store_path=str(store_path),
-            config=client_config,
-            ssl=maybe_ssl_context(homeserver, runtime_paths=runtime_paths),
-        )
-        client.user_id = credentials.user_id
-        client.device_id = credentials.device_id
-        client.access_token = credentials.access_token
-        session = _open_owned_ingestion(
-            client,
-            bootstrap,
-            config=config,
-            consumer_generation=bound_consumer.generation,
-            stream_id=bound_consumer.stream_id,
-            _completion_sink=completion_sink,
-        )
         return OwnedMatrixSession(client, session, bound_consumer)
-    except BaseException:
-        await _cleanup_failed_owned_matrix_open(bootstrap, client)
+    except BaseException as error:
+        if session is not None:
+            try:
+                await session.close()
+            except BaseException:
+                logger.exception("owned_matrix_session_cleanup_failed")
+        try:
+            await client.close()
+        except BaseException:
+            logger.exception("owned_matrix_http_cleanup_failed")
+        if isinstance(error, nio.LocalProtocolError):
+            raise matrix_startup_error(str(error), permanent=True) from error
         raise

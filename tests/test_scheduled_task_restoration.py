@@ -6,11 +6,8 @@ import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
-from uuid import UUID
 
 import pytest
-from nio.ingest.model import TransportKind
-from nio.store._sync_journal_values import _FrameCompletion
 
 from mindroom.agent_reply_membership_sync import AgentReplyMembershipSync
 from mindroom.config.main import Config
@@ -34,16 +31,8 @@ if TYPE_CHECKING:
 
 async def _complete_frame(bot: AgentBot, index: int = 0) -> None:
     """Drive runtime side effects through the durable completion owner."""
-    await bot._on_ingestion_frame_completion(
-        _FrameCompletion(
-            UUID(f"20000000-0000-4000-8000-{index + 1:012d}"),
-            TransportKind.CLASSIC,
-            0,
-            index,
-            index * 2 + 1,
-            index * 2 + 2,
-        ),
-    )
+    del index
+    await bot._on_ingestion_frame_completion()
 
 
 class TestScheduledTaskRestoration:

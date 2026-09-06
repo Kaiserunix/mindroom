@@ -3,7 +3,6 @@
 import hashlib
 import hmac
 import secrets
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import cached_property
 from uuid import UUID
@@ -11,8 +10,7 @@ from uuid import UUID
 import httpx
 import nio
 from nio import crypto
-from nio.ingest.config import IngestionConfig
-from nio.ingest.coordinator import _FrameCompletion
+from nio.durable import DurableSyncConfig
 
 from mindroom.constants import RuntimePaths, runtime_matrix_homeserver, runtime_matrix_ssl_verify
 from mindroom.logging_config import get_logger
@@ -1153,8 +1151,7 @@ async def login_agent_owned_session(
     *,
     consumer_store: IngestionConsumerStore,
     new_consumer_generation: UUID,
-    config: IngestionConfig,
-    completion_sink: Callable[[_FrameCompletion], Awaitable[None]] | None = None,
+    config: DurableSyncConfig,
 ) -> OwnedMatrixSession:
     """Authenticate and open one agent's exclusive durable Matrix session."""
     auth = appservice.resolve_managed_account_auth(runtime_paths)
@@ -1173,7 +1170,6 @@ async def login_agent_owned_session(
         consumer_store=consumer_store,
         new_consumer_generation=new_consumer_generation,
         config=config,
-        completion_sink=completion_sink,
     )
     try:
         matrix_id = _validated_authenticated_agent_matrix_id(

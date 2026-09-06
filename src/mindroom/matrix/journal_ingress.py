@@ -256,6 +256,7 @@ def ingestion_timeline_views(
     self_sender: str,
     provenance: nio.TimelineEventProvenance,
     expected_event_id: str | None = None,
+    security_metadata: Mapping[str, object] | None = None,
     schedule_trigger_sender_is_managed: Callable[[str], bool] = lambda _sender: False,
 ) -> tuple[InboundEvent, ProjectedEvent | None] | None:
     """Classify one durable timeline input, or return its compatibility fate."""
@@ -267,6 +268,8 @@ def ingestion_timeline_views(
         raise TypeError(message)
     if expected_event_id is not None and parsed.event_id != expected_event_id:
         raise ValueError(message)
+    if security_metadata is not None:
+        _restore_security_metadata(parsed, security_metadata, room_id=room_id, event_id=parsed.event_id)
     kind = _event_kind(parsed)
     if kind is EventKind.SCHEDULE_TRIGGER and not schedule_trigger_sender_is_managed(parsed.sender):
         return None

@@ -18,7 +18,6 @@ from mindroom.cli.doctor import (
     doctor,
 )
 from mindroom.config.main import Config
-from mindroom.config.matrix import MatrixSyncConfig
 from mindroom.config.models import RouterConfig
 from mindroom.constants import resolve_primary_runtime_paths
 from mindroom.credentials_sync import get_embedder_api_key
@@ -216,41 +215,6 @@ def test_doctor_counts_credential_sync_value_error_as_warning(
 def _versions_response(payload: dict[str, object]) -> httpx.Response:
     request = httpx.Request("GET", "https://matrix.test/_matrix/client/versions")
     return httpx.Response(200, request=request, json=payload)
-
-
-def test_homeserver_check_flags_missing_msc4186_for_sliding_mode(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Sliding mode must fail the homeserver check when MSC4186 is not advertised."""
-    monkeypatch.setattr(
-        "mindroom.cli.doctor.httpx.get",
-        lambda *_args, **_kwargs: _versions_response({"versions": ["v1.11"], "unstable_features": {}}),
-    )
-
-    config = Config(matrix_sync=MatrixSyncConfig(mode="sliding"))
-
-    assert _check_matrix_homeserver(_doctor_runtime_paths(tmp_path), config=config) == (0, 1, 0)
-    output = capsys.readouterr().out
-    assert "simplified_msc3575" in output
-    assert "matrix_sync.mode:" in output
-
-
-def test_homeserver_check_passes_when_msc4186_is_advertised(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Sliding mode passes when the homeserver advertises MSC4186."""
-    payload = {"versions": ["v1.11"], "unstable_features": {"org.matrix.simplified_msc3575": True}}
-    monkeypatch.setattr(
-        "mindroom.cli.doctor.httpx.get",
-        lambda *_args, **_kwargs: _versions_response(payload),
-    )
-
-    config = Config(matrix_sync=MatrixSyncConfig(mode="sliding"))
-
-    assert _check_matrix_homeserver(_doctor_runtime_paths(tmp_path), config=config) == (1, 0, 0)
 
 
 def test_homeserver_check_ignores_msc4186_for_classic_mode(

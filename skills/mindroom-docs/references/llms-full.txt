@@ -1498,15 +1498,9 @@ matrix_space:
 
 # Matrix sync transport (optional)
 # classic uses /v3/sync and backfills limited-timeline gaps from /messages.
-# sliding opts into MSC4186 Simplified Sliding Sync and requires a homeserver
-# advertising org.matrix.simplified_msc3575 (checked by `mindroom doctor`).
-# Sliding positions are connection-scoped, so a restarted backend replays at
-# most sliding_timeline_limit events per room; older undelivered events are
-# not recovered.
-# Changing matrix_sync restarts running agents to pick up the new transport.
+# Only Classic sync is supported; explicit Sliding configuration is rejected.
 matrix_sync:
   mode: classic                    # Default: classic
-  sliding_timeline_limit: 100      # Default: 100 (per-room window for sliding requests)
 
 # Timezone for scheduled tasks (optional)
 timezone: America/Los_Angeles      # Default: UTC
@@ -17122,15 +17116,13 @@ Use `build_message_content()` from `message_builder.py` to construct thread-awar
 
 Each agent bot runs an owned Nio ingestion session with a five-second long-polling timeout.
 The default `matrix_sync.mode: classic` streams events through classic `/v3/sync` and backfills limited-timeline gaps from `/messages`.
-Set `matrix_sync.mode: sliding` to opt into MSC4186 Simplified Sliding Sync on homeservers that advertise `org.matrix.simplified_msc3575`.
-`matrix_sync.sliding_timeline_limit` (default 100) bounds the per-room timeline window of each sliding request.
-Nio owns transport cursors, crypto preparation, and persisted per-event provenance for both sync transports.
-Sliding Sync classifies its validated `num_live` tail as live, ordinary continuations without `num_live` as live, and initial or expanded timelines without `num_live` as history.
+Only Classic sync is supported; explicit Sliding configuration is rejected.
+Nio owns transport cursors, crypto preparation, and persisted per-event provenance.
 Classic Sync distinguishes initial history, live continuations, and recovered gaps; MindRoom uses the provenance Nio supplies without reclassifying it.
 This provenance remains attached across recovery, restart, and decryption independently of journal checkpoint persistence.
-`matrix/durable_ingestion.py` validates one immutable Nio batch and atomically commits its receipt, membership effects, semantic event, and conversation projection in the MindRoom journal before acknowledging that batch to Nio.
+`matrix/durable_ingestion.py` converts one trusted Nio batch and atomically commits its receipt, ordered membership effects, semantic events, and conversation projection in the MindRoom journal before acknowledging that batch to Nio.
 An admission failure leaves the batch unsettled for retry, and replay after a committed admission returns the original receipt without duplicating semantic work.
-Typing and presence remain fresh best-effort notifications outside durable work; read receipts still pass through durable ingestion.
+Typing, presence and read receipts are excluded from durable admission.
 The development lock pins the accompanying Nio implementation to the exact revision in `tool.uv.sources` in `pyproject.toml`.
 Admission is fail-closed at every provenance, not only for recovery, because an event the journal never accepted is one no later process would see again.
 Silent schedules use the custom `io.mindroom.scheduled.trigger` timeline event so clients do not render the task body as a room message.
@@ -17403,7 +17395,7 @@ main() entry
 
 - **Entity order**: Router first, then agents, then teams
 - **Room setup** (`_setup_rooms_and_memberships`): Router creates rooms, invites agents, teams, and users, then bots join
-- **Sync loops**: Each bot runs `sync_forever_with_restart()` with automatic retry; the default `matrix_sync.mode: classic` uses classic `/v3/sync` and `matrix_sync.mode: sliding` opts into MSC4186 Simplified Sliding Sync
+- **Sync loops**: Each bot runs `sync_forever_with_restart()` with automatic retry; `matrix_sync.mode: classic` uses Classic `/v3/sync`; Sliding configuration is rejected
 - **Internal user identity**: `mindroom_user.username` is the account-creation request; runtime authorization uses the persisted actual Matrix ID
 
 ## Session Storage Upgrades
@@ -17443,7 +17435,7 @@ The MCP manager callback schedules an orchestrator-owned background task so the 
 7. If responses never drain, either replacement flow stops deferring after 600 seconds and closes the gate over still-running responses.
    This bounded forced apply prevents a busy install from starving config or MCP replacement forever.
 8. For config reloads, `ConfigReloadLifecycle._update_config()` loads and validates the new config while admission remains open, then `build_config_update_plan()` computes targeted restarts and in-place reconciliations after the gate closes.
-9. The orchestrator applies the resulting plan: changed entities are replaced, unchanged bots receive the new config, and room-only changes reconcile memberships in place while restarting only sliding receive loops to refresh their subscriptions.
+9. The orchestrator applies the resulting plan: changed entities are replaced, unchanged bots receive the new config, and room-only changes reconcile memberships in place without restarting Classic receive loops.
    Call-enabled agents are conservatively replaced after any authored config change because active call tooling captures the full authored config snapshot.
 10. Removed entities run `cleanup()` to leave rooms and stop the bot.
 11. New and restarted bots go through room setup.

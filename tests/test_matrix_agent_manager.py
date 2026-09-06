@@ -13,7 +13,7 @@ import httpx
 import nio
 import pytest
 import yaml
-from nio.ingest.config import ClassicSourceConfig, IngestionConfig
+from nio.durable import DurableSyncConfig
 
 from mindroom import constants as constants_mod
 from mindroom.config.main import Config
@@ -1597,12 +1597,7 @@ class TestAgentLogin:
         )
         runtime_paths = _runtime_paths(tmp_path)
         generation = UUID("22222222-2222-4222-8222-222222222222")
-        config = IngestionConfig(
-            ClassicSourceConfig(
-                timeout_ms=30_000,
-                filter_json=b'{"room":{"timeline":{"limit":50}}}',
-            ),
-        )
+        config = DurableSyncConfig(sync_timeout_ms=30_000)
         credentials = _owned_session.MatrixCredentials(
             agent_user.user_id,
             "AGENTDEVICE",
@@ -1615,7 +1610,6 @@ class TestAgentLogin:
         )
         opened = MagicMock(client=owned_client, session=AsyncMock())
         consumer_store = object()
-        completion_sink = AsyncMock()
         order: list[str] = []
 
         async def password_credentials(*_args: object, **_kwargs: object) -> object:
@@ -1653,7 +1647,6 @@ class TestAgentLogin:
                 consumer_store=consumer_store,
                 new_consumer_generation=generation,
                 config=config,
-                completion_sink=completion_sink,
             )
 
         assert result is opened
@@ -1671,7 +1664,6 @@ class TestAgentLogin:
             consumer_store=consumer_store,
             new_consumer_generation=generation,
             config=config,
-            completion_sink=completion_sink,
         )
         persist.assert_called_once()
         cross_signing.assert_awaited_once_with(owned_client, agent_user)

@@ -113,6 +113,7 @@ class AdmissionFacts:
 
     receipt_new: bool
     semantic_event_new: bool
+    record_facts: tuple[AdmissionFacts, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject malformed or impossible protocol facts."""
@@ -205,22 +206,25 @@ class InboundEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class IngestionBatchAdmission:  # noqa: D101
-    schema_version: int
-    consumer_generation: UUID
+class IngestionRecordAdmission:  # noqa: D101
+    disposition: IngestionRecordDisposition
+    source: DepartureSource | None = None
+    room_id: str | None = None
+    previous_membership: str | None = None
+    membership: str | None = None
+    previous_membership_epoch: int | None = None
+    membership_epoch: int | None = None
+    event: InboundEvent | None = None
+    projected: ProjectedEvent | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IngestionBatchAdmission:
+    """Ordered effects from one batch on the principal-bound stream."""
+
     stream_id: UUID
     sequence: int
-    sha256: bytes
-    record_id: str
-    disposition: IngestionRecordDisposition
-    source: DepartureSource | None
-    room_id: str | None
-    previous_membership: str | None
-    membership: str | None
-    previous_membership_epoch: int | None
-    membership_epoch: int | None
-    event: InboundEvent | None
-    projected: ProjectedEvent | None
+    records: tuple[IngestionRecordAdmission, ...]
 
 
 @dataclass(frozen=True, slots=True)

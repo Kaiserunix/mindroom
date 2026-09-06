@@ -2144,12 +2144,12 @@ class TestMultiAgentOrchestrator:
         assert set(setup_rooms.await_args.args[0]) == {router_bot, general_bot}
 
     @pytest.mark.asyncio
-    async def test_reconcile_post_update_rooms_preserves_router_grants_before_sliding_restart(
+    async def test_reconcile_post_update_rooms_preserves_classic_receive_loop(
         self,
         tmp_path: Path,
     ) -> None:
-        """Room-only edits must preserve refreshed router grants across subscription restart."""
-        config = _runtime_bound_config(Config(matrix_sync={"mode": "sliding"}), tmp_path)
+        """Room-only edits reconcile membership without restarting Classic sync."""
+        config = _runtime_bound_config(Config(), tmp_path)
         orchestrator = _MultiAgentOrchestrator(runtime_paths=runtime_paths_for(config))
         orchestrator.config = config
         router_bot = MagicMock(agent_name=ROUTER_AGENT_NAME, config=config, running=True)
@@ -2175,9 +2175,8 @@ class TestMultiAgentOrchestrator:
         ):
             await orchestrator._reconcile_post_update_rooms(plan, changed_entities=set())
 
-        cancel_sync.assert_awaited_once_with(ROUTER_AGENT_NAME, orchestrator._sync_tasks)
-        router_bot.preserve_reply_memberships_on_next_sync_start.assert_called_once_with()
-        start_sync.assert_called_once_with(ROUTER_AGENT_NAME, router_bot)
+        cancel_sync.assert_not_awaited()
+        start_sync.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.requires_matrix  # Requires real Matrix server for orchestrator initialization

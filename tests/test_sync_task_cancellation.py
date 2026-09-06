@@ -12,11 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, call, patch
-from uuid import UUID
 
 import pytest
-from nio.ingest.model import TransportKind
-from nio.store._sync_journal_values import _FrameCompletion
 from structlog.testing import capture_logs
 
 from mindroom import runtime_shutdown
@@ -50,14 +47,10 @@ from mindroom.matrix.health import (
     reset_matrix_sync_health,
 )
 from mindroom.matrix.identity import MatrixID
-from mindroom.matrix.sync_loop import (
-    _sliding_sync_lists,
-    _sliding_sync_room_subscriptions,
-)
 from mindroom.matrix.users import AgentMatrixUser
 from mindroom.matrix_delivery import RecoveryOutcome
 from mindroom.orchestration import runtime as runtime_helpers
-from mindroom.orchestration.config_updates import ConfigUpdatePlan, build_config_update_plan
+from mindroom.orchestration.config_updates import ConfigUpdatePlan
 from mindroom.orchestration.runtime import (
     EntityStartResults,
     _MatrixSyncStalledError,
@@ -108,16 +101,8 @@ from tests.conftest import (
 
 async def _complete_frame(bot: AgentBot, index: int = 0) -> None:
     """Drive runtime side effects through the durable completion owner."""
-    await bot._on_ingestion_frame_completion(
-        _FrameCompletion(
-            UUID(f"30000000-0000-4000-8000-{index + 1:012d}"),
-            TransportKind.CLASSIC,
-            0,
-            index,
-            index * 2 + 1,
-            index * 2 + 2,
-        ),
-    )
+    del index
+    await bot._on_ingestion_frame_completion()
 
 
 def _fake_runtime_paths(**env_overrides: str) -> RuntimePaths:
@@ -477,7 +462,7 @@ async def test_ingestion_quiesce_marks_supervisor_stop_intent() -> None:
     await AgentBot._quiesce_matrix_ingestion(bot)
 
     assert bot._matrix_ingestion_quiesce_requested is True
-    bot._ingestion_session._quiesce.assert_awaited_once()
+    bot._ingestion_session.quiesce.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1746,7 +1731,7 @@ async def test_sync_iteration_cancel_preserves_restart_shutdown_source() -> None
 @pytest.mark.asyncio
 async def test_ingestion_frame_completion_marks_sync_success(tmp_path: Path) -> None:
     """A completed durable frame must feed the watchdog clock and first-sync lifecycle."""
-    bot = _sliding_response_bot(tmp_path)
+    bot = _durable_response_bot(tmp_path)
     bot._first_sync_done = False
 
     with patch.object(
@@ -1772,7 +1757,7 @@ async def test_delivery_recovery_asks_the_outbox_on_every_sync_response(
     sync. Each of those leaves a row unacknowledged, and a flag armed by only
     some of them loses the answers the others produced.
     """
-    bot = _sliding_response_bot(tmp_path)
+    bot = _durable_response_bot(tmp_path)
     bot._first_sync_done = False
     outcomes = [
         RuntimeError("the first pass never reported"),
@@ -1804,7 +1789,7 @@ async def test_delivery_recovery_asks_the_outbox_on_every_sync_response(
 @pytest.mark.asyncio
 async def test_delivery_recovery_drops_sync_request_context_before_transport(tmp_path: Path) -> None:
     """A detached recovery worker must not retain its spawning sync context."""
-    bot = _sliding_response_bot(tmp_path)
+    bot = _durable_response_bot(tmp_path)
     receive_generation: ContextVar[str | None] = ContextVar("receive_generation", default=None)
     observed: list[str | None] = []
 
@@ -1828,7 +1813,7 @@ async def test_sync_response_returns_while_delivery_recovery_waits_for_the_next_
     tmp_path: Path,
 ) -> None:
     """A parked recovery pass cannot block the next receive-loop callback."""
-    bot = _sliding_response_bot(tmp_path)
+    bot = _durable_response_bot(tmp_path)
     recovery_started = asyncio.Event()
     next_response_started = asyncio.Event()
     first_response_returned = asyncio.Event()
@@ -1865,7 +1850,7 @@ async def test_delivery_recovery_coalesces_sync_wakes_without_overlapping_passes
     tmp_path: Path,
 ) -> None:
     """Several responses during one recovery pass request one follow-up pass."""
-    bot = _sliding_response_bot(tmp_path)
+    bot = _durable_response_bot(tmp_path)
     first_pass_started = asyncio.Event()
     allow_first_pass_finish = asyncio.Event()
     second_pass_started = asyncio.Event()
@@ -1909,7 +1894,7 @@ async def test_delivery_recovery_coalesces_sync_wakes_without_overlapping_passes
 @pytest.mark.asyncio
 async def test_sync_shutdown_cancels_the_owned_delivery_recovery(tmp_path: Path) -> None:
     """The existing owner drain cancels a parked delivery-recovery task."""
-    bot = _sliding_response_bot(tmp_path)
+    bot = _durable_response_bot(tmp_path)
     recovery_started = asyncio.Event()
     recovery_cancelled = asyncio.Event()
 
@@ -2158,38 +2143,8 @@ async def test_orderly_stop_defers_saturated_response_timeouts_without_traceback
         bot._runtime_view.client.close.assert_not_awaited()
 
 
-def test_matrix_sync_change_restarts_existing_entities() -> None:
-    """Changing matrix_sync must restart running bots so sync loops pick up the new transport."""
-    plan = build_config_update_plan(
-        current_config=Config(),
-        new_config=Config(matrix_sync=MatrixSyncConfig(mode="sliding")),
-        configured_entities={"router", "code"},
-        existing_entities={"router", "code"},
-        agent_bots={},
-    )
-
-    assert plan.entities_to_restart == {"router", "code"}
-
-
-def test_sliding_sync_required_state_is_not_shared_between_requests() -> None:
-    """Sliding sync request builders should not reuse mutable required_state lists."""
-    lists = _sliding_sync_lists(timeline_limit=7)
-    room_subscriptions = _sliding_sync_room_subscriptions(["!alpha:localhost", "!beta:localhost"], timeline_limit=7)
-
-    list_required_state = lists["mindroom"]["required_state"]
-    alpha_required_state = room_subscriptions["!alpha:localhost"]["required_state"]
-    beta_required_state = room_subscriptions["!beta:localhost"]["required_state"]
-
-    assert list_required_state == alpha_required_state == beta_required_state
-    assert list_required_state is not alpha_required_state
-    assert alpha_required_state is not beta_required_state
-    alpha_required_state.append(["m.room.power_levels", ""])
-    assert ["m.room.power_levels", ""] not in beta_required_state
-    assert ["m.room.power_levels", ""] not in _sliding_sync_lists(timeline_limit=7)["mindroom"]["required_state"]
-
-
-def _sliding_response_bot(tmp_path: Path) -> AgentBot:
-    """Build one real bot for Sliding response lifecycle tests."""
+def _durable_response_bot(tmp_path: Path) -> AgentBot:
+    """Build one real bot for durable sync lifecycle tests."""
     runtime_paths = test_runtime_paths(tmp_path)
     config = bind_runtime_paths(
         Config(
@@ -2205,7 +2160,7 @@ def _sliding_response_bot(tmp_path: Path) -> AgentBot:
                     id="test-model",
                 ),
             },
-            matrix_sync=MatrixSyncConfig(mode="sliding"),
+            matrix_sync=MatrixSyncConfig(),
         ),
         runtime_paths,
     )
@@ -2798,7 +2753,6 @@ async def test_start_runtime_ingests_before_membership_setup_but_defers_semantic
     router_bot.stop = AsyncMock()
     router_bot.schedule_reply_authorized_call_reconciliation = MagicMock()
     router_bot.schedule_reply_authorized_call_revocation = MagicMock()
-    router_bot.preserve_reply_memberships_on_next_sync_start = MagicMock()
     router_bot.release_pending_turn_journal_replay = MagicMock()
     router_bot.first_sync_complete = True
 
@@ -2908,7 +2862,6 @@ def _orchestrator_with_membership_startup_bots(
     router_bot.stop = AsyncMock()
     router_bot.schedule_reply_authorized_call_reconciliation = MagicMock()
     router_bot.schedule_reply_authorized_call_revocation = MagicMock()
-    router_bot.preserve_reply_memberships_on_next_sync_start = MagicMock()
     general_bot = AsyncMock()
     general_bot.agent_name = "general"
     general_bot.matrix_id = MatrixID.parse("@mindroom_general:localhost")
