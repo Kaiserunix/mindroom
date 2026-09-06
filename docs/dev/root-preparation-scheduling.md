@@ -121,3 +121,76 @@ Keep both failures visible. These changes isolate independent preparation and re
 The shared persistence and catch-up throughput limit remains separate work, with no relaxed deadline, dropped durable events, second writer or codec replacement in this change.
 
 Runtime CI passed: Nio Python 3.12/3.13/3.14 tests, types and hooks; MindRoom's remote suite (15,848 passed, 12 skipped), all four full/minimal AMD64/ARM64 image builds, and the complete smoke stack.
+
+
+## Durable batch replacement qualification
+
+The coordinated durable batch adapter replaces the earlier Nio Frames/Work
+engine. The root preparation scheduler still uses eight slots. A diagnostic
+sixteen-slot trial at Nio `34699bf` and MindRoom `72732c22b` changed Tuwunel's
+200-request median from 71.754 to 71.648 seconds and p95 from 81.323 to 81.196;
+full overlap remained below 45 seconds (41.207 versus 42.406). Summed overlapping
+preparation durations grew from 159.4 to 296.7 seconds. This does not justify a
+larger cap or another writer; the production scheduler remains unchanged.
+
+Initial NORMAL adapter controls completed all 200 replies on both servers. The
+final FULL build at Nio `ed316ed` exposed a separate Tuwunel recovery defect:
+only 73 roots completed before the deadline despite zero remaining queue debt.
+A trace showed an exclusive pagination end preventing proof of retained-tail
+overlap. Nio `aac2e32` removes that HTTP upper bound while retaining fixed page,
+byte and continuation limits. Initial history and genuine unprovable gaps keep
+their existing authorization rules. This is a producer pagination correction,
+not a scheduling or durability relaxation. Nio's tracked design and measured
+results preserve the failed control and regression coverage.
+
+
+## Final durable batch controls
+
+The final runtime is Nio `aac2e32` with MindRoom `ed4a209d6`. All installed
+Python files and loaded module paths match those commits before and after each
+control. No production behavior, deadline, health timeout, overlap threshold,
+workload, or shutdown check was patched. Each run uses FULL durability, 200 roots,
+a 180-second shared reply deadline, a 45-second minimum full visible overlap,
+and a two-second health timeout. Reply times include about 60 seconds of
+synthetic generation; they are not LLM latency predictions.
+
+| Control | Reply median | Reply p95 | Full overlap | Acceptance |
+| --- | ---: | ---: | ---: | --- |
+| Tuwunel | 73.927 s | 86.501 s | 37.567 s | Overlap below 45 s |
+| Tuwunel repeat | 74.830 s | 86.533 s | 37.470 s | Overlap below 45 s |
+| Synapse 5,000-event cap | 76.987 s | 82.719 s | 47.352 s | PASS |
+
+Every run completed exactly 200 replies and all three post-terminal fence
+principals, with zero input/batch rows, journal work or delivery-outbox debt after
+clean shutdown. No event-loop stalls, degraded reads, or incomplete-drain
+warnings were recorded. Synapse passes every predicate. Both Tuwunel runs fail
+only the original overlap requirement; do not describe them as full capacity
+passes. Their recovered-request failure is corrected, and the failed pre-fix
+73/200 run remains recorded above.
+
+Compared with the earlier published controls, Tuwunel's median is roughly
+unchanged and p95 is about 2.6 seconds slower (86.5 versus 83.9). Synapse's median
+and p95 improve from roughly 80.1/87.6 to 77.0/82.7 seconds, and its previous fence
+and retained-input failures are absent. These few runs are workload evidence,
+not a statistical guarantee of general speedup. The much lower engine cost does
+not remove the application's shared startup persistence cost. In the final
+Tuwunel runs, preparation starts span 23.5-23.9 seconds; the sixteen-slot trial
+already failed to improve this class of delay materially. A separate application
+persistence optimization needs its own profile and design. No writer redesign,
+serializer dependency, durability reduction, or relaxed threshold is justified
+as part of this adapter replacement.
+
+Detailed final controls: `controls-20260906T093405Z` and
+`controls-20260906T094006Z` in the retained capacity workspace. The producer design and this scheduling
+contract retain the guarantees and deliberate limits.
+
+
+Final dependency verification pins Nio
+`a686d43119a8c14b48d46a57858f70ee1579de55`, whose Python files match the tested
+`aac2e32` wheel. The locked dependency installs from that Git commit. The full
+consumer suite passes 15,522 tests with 22 skipped and 16 warnings in 119.58
+seconds, with automatic resync disabled for the suite and its subprocesses.
+All producer and consumer Python files match before and after the run. Complete
+repository hooks pass, including ty, frontend checks and generated-document
+checks. Nio's remote Python 3.12/3.13/3.14 tests, types, hooks and coverage also
+pass. No production scheduling change accompanies this dependency update.
