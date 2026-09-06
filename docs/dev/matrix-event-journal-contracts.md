@@ -302,3 +302,17 @@ Both homeservers deduplicate a repeated transaction ID per sending device rather
 So deterministic outbox retries survive a crash, but would **not** survive re-login with a new device.
 
 Synapse expires stored transaction mappings on a periodic cleanup, so a deterministic retry is idempotent for a bounded time rather than indefinitely.
+
+### Producer-owned local membership confirmation
+
+The durable Classic producer keeps one successful local membership intent until
+its outcome is acknowledged and an authoritative sync boundary observes it. A
+subsequent local command waits for that observation; shutdown may leave the
+acknowledged observation marker for restart. Nio reconciles reported echoes and
+owns the resulting membership epochs.
+
+Typed batch admission applies explicit producer membership positions directly.
+It must not create or consume the legacy `owed_departure_reports` counter for
+these records. Otherwise a suppressed echo leaves debt that hides the next real
+departure. Keep the legacy counter only for separate callers whose contracts still
+require it. Admission and its lifecycle effects remain in one journal transaction.
