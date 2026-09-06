@@ -2167,6 +2167,24 @@ class ManagedTuwunelStack:
             return None
         return access_token, device_id
 
+    def managed_room_baseline_ready(self) -> bool:
+        """Wait for durable room history before sending the warm-up request."""
+        for path in (self.storage_path / "encryption_keys").glob("*/*.db"):
+            with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as database:
+                if not database.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='NioDurableRoom'",
+                ).fetchone():
+                    continue
+                row = database.execute(
+                    "SELECT metadata FROM NioDurableRoom WHERE room_id=?",
+                    (self.room_id,),
+                ).fetchone()
+            if row is not None:
+                metadata = json.loads(row[0])
+                if metadata.get("own_user_id") == self.agent_id:
+                    return metadata.get("baseline") is True and metadata.get("membership") == "join"
+        return False
+
     def managed_stream_health_sample(self) -> ManagedStreamHealthSample:
         """Read and parse one managed-stream API health sample."""
         response = httpx.get(f"http://127.0.0.1:{self.api_port}/api/health", timeout=2)
@@ -3218,6 +3236,10 @@ class LiveFuzzRunner:
 
     async def _prepare_managed_stream_baseline(self, *, run_id: str) -> ManagedStreamBaseline:
         """Complete one warm turn before snapshotting observer and log state."""
+        async with asyncio.timeout(self.reply_timeout):
+            while not await asyncio.to_thread(self.stack.managed_room_baseline_ready):
+                self.stack.require_runtime_alive()
+                await asyncio.sleep(0.1)
         await self.client.sync_incremental(timeout_ms=0, allow_limited=True)
         warm_baseline = frozenset(self.client.seen_events)
         warm_event_id = await self.client.send_event(

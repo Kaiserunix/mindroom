@@ -855,6 +855,7 @@ async def test_managed_stream_warm_completion_precedes_event_and_log_baselines(
         return 5
 
     monkeypatch.setattr(client, "send_event", send_warm)
+    monkeypatch.setattr(stack, "managed_room_baseline_ready", lambda: True)
     monkeypatch.setattr(runner, "_wait_for_managed_stream_terminals", wait_for_warm)
     monkeypatch.setattr(stack, "log_count", log_count)
     try:
