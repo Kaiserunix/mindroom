@@ -348,3 +348,34 @@ The new README specifies the exact producer/consumer revisions from this series,
 the consumer's locked Python 3.13 environment, immutable images, location
 adaptation and sequential `--arm 40`, `400`, `400`, `40` commands. Later
 documentation-only heads are not substituted for those qualified revisions.
+
+## Room lifecycle correction follow-up
+
+The next review reproduced six correctness defects at producer `6143e8a`.
+Producer `cb7c55da1ffca2f1cdf0733968b208ffe082b397` fixes them with 30 net
+production lines (+79/-49 across seven files). The complete Nio PR remains
+1,250 production lines smaller than main `5b6de3bc`. The consumer exactly pins
+the rebuilt wheel; all 60 installed producer source files match that commit.
+
+Local joins now preserve known encryption and invalidate the old room projection
+and Sliding checkpoint together. Unknown room state cannot authorize plaintext
+sending. Completed recipient lookup permits encryption without changing the
+historical room-member projection. Invitation snapshots replace former joined
+members, Classic reconciliation preserves explicit bans, and truncated HTTP
+bodies use the existing bounded retry policy. The producer contract documents
+these ownership rules without adding a queue, database, schema or public API.
+
+Producer verification passes 879 tests with three skipped, zero mypy errors
+across 60 source files and all hooks. Sixteen new cases cover real HTTP,
+peer-side decryption and restart. The consumer passes 287 affected tests and all hooks,
+including membership, device authorization, message delivery, durable admission
+and the existing qualification harness. Its production source is unchanged from
+`3c297613fe478a3526acea9127bbaae884760326`; only the dependency pin/lock and this
+evidence index change.
+
+Reproduction instructions, red/green logs, final verification logs and installed
+wheel hashes are retained in the persistent capacity workspace at
+`durable-sync-kernel/review-room-lifecycle-20260906`. The new tests and ownership
+contract are Git-tracked in Nio. Prior performance measurements retain their
+original source IDs; this correctness follow-up does not claim a fresh capacity
+qualification, performance improvement or 1,000-reply result.

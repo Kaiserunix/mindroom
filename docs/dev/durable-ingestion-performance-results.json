@@ -358,6 +358,52 @@
     "roots": 200,
     "synchronous": "FULL"
   },
+  "room_lifecycle_review": {
+    "changes": [
+      "Joined-room reset preserves encryption and invalidates stale projection, recipients, outbound group and Sliding checkpoint.",
+      "Plaintext sending waits for established room state; known encrypted rooms use fresh recipients.",
+      "Completed durable recipient cache permits encryption without claiming canonical members are fully synced.",
+      "Invitation snapshots replace former joined members in memory and on disk.",
+      "Classic reconciliation preserves final explicit bans before duplicate filtering.",
+      "Truncated HTTP bodies use the existing bounded retry policy."
+    ],
+    "date": "2026-09-06",
+    "evidence_directory": "durable-sync-kernel/review-room-lifecycle-20260906",
+    "limits": [
+      "No new schema, public API, queue or database.",
+      "Exact local membership echo attribution remains unsupported; the existing net-boundary policy is unchanged.",
+      "No fresh capacity or performance benchmark was run; prior results retain their original source IDs.",
+      "No 1000-reply qualification."
+    ],
+    "new_test_cases": 16,
+    "production_lines": {
+      "consumer_source_changes": 0,
+      "full_pr_added": 5221,
+      "full_pr_net": -1250,
+      "full_pr_removed": 6471,
+      "main_revision": "5b6de3bc6f4aa0c317185953f77c9c8fe3d806a3",
+      "review_added": 79,
+      "review_net": 30,
+      "review_removed": 49
+    },
+    "qualified_producer_revision": "cb7c55da1ffca2f1cdf0733968b208ffe082b397",
+    "reports_reproduced_and_fixed": 6,
+    "reviewed_producer_revision": "6143e8a767b318b0105dd5b43cb280e5ccc6daa2",
+    "unchanged_consumer_source_revision": "3c297613fe478a3526acea9127bbaae884760326",
+    "verification": {
+      "consumer_affected_tests_passed": 287,
+      "consumer_hooks_passed": true,
+      "consumer_python": "3.13.14",
+      "consumer_test_seconds": 35.45,
+      "installed_producer_source_files_matched": 60,
+      "producer_hooks_passed": true,
+      "producer_mypy_errors": 0,
+      "producer_mypy_source_files": 60,
+      "producer_suite_seconds": 71.72,
+      "producer_tests_passed": 879,
+      "producer_tests_skipped": 3
+    }
+  },
   "sliding_restoration": {
     "archive": {
       "bytes": 3916060,
