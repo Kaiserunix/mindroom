@@ -1391,13 +1391,7 @@ def _admit(
     projected: ProjectedEvent | None,
 ) -> AdmissionResult:
     """Admit one event after any already-visible outbox delivery is projected."""
-    result = journal.admit(
-        transaction,
-        principal_id,
-        event,
-        projected,
-        membership_epoch=journal.current_membership_epoch(transaction, principal_id, event.room_id),
-    )
+    result = journal.admit(transaction, principal_id, event, projected)
     if result is AdmissionResult.ADMITTED:
         _snapshot_interactive_source(transaction, principal_id, event)
     return result

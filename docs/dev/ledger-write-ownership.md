@@ -206,18 +206,53 @@ No production code, dependency or correctness guarantee changes in this profilin
 Retained evidence is under `startup-waits` in the capacity workspace: `trace-200-20260906T141302Z`, `sample-200-20260906T141922Z`, `gil-001-200-20260906T142431Z`, `pool-four-200-20260906T142914Z` and `control-200-20260906T143211Z`.
 The correlated reports distinguish task waits, ready delays, thread CPU, exclusive writer phases and sampled native waits rather than summing overlapping measurements.
 
-## Reuse the membership version inside one admission
+## Membership-query experiment: not adopted
 
-Batch admission already locks and reads each event's current membership state.
-Pass that state's membership version into the existing insert/project helper instead of selecting it again.
-Standalone admission still reads the version in its existing transaction before invoking that helper.
-The value belongs to one event operation: subsequent records still observe any intervening leave/rejoin transition, and Postgres retains the same row lock.
-This changes no transaction, durable fact, persistent format, public store API or writer scheduling policy.
-The production candidate adds nine net lines across the existing journal and store modules.
-SQLite statement tracing verifies that sixteen events add no per-event membership-version SELECT, including the departure-suppressed path.
-The membership test also exercises leave/rejoin within one batch on both SQLite and Postgres.
-Acceptance requires the existing correctness checks and unchanged-workload benchmarks against a separate committed baseline; query removal alone is not an end-to-end speedup claim.
-The focused group passes 42 tests, and the complete suite passes 15,546 tests with 22 skipped and 15 warnings in 91.38 seconds.
-An initial full run exposed a 500 ms guard in the projection-progress test; a controlled 650 ms delay after successful admission reproduces that failure without changing the database result.
-The test now sets a 30-second retry backoff and a two-second hang guard, retaining the requirement that admission progress independently of unrelated retries while allowing ordinary database latency.
-The controlled-delay probe passes, and scoped review finds no blockers in either the epoch reuse or the test's retained progress guarantee.
+Candidate `ee48c59c1` passed the membership version already locked for each event into the existing admission helper, removing one redundant SELECT per event with nine net production lines.
+Standalone admission retained its own transaction-local read, and later batch records still observed leave/rejoin transitions.
+SQLite tracing confirmed the query reduction for normal and departure-suppressed events.
+The candidate passed 42 focused tests and 15,546 full-suite tests, with 22 skipped and 15 warnings in 91.38 seconds; all repository hooks and scoped review passed.
+
+Alternating uninstrumented controls compare the committed candidate with `d59028b0b` in a separate checkout and locked environment.
+Every run verifies the committed source and loaded modules before and after execution, retaining FULL durability, eight preparations, 200 roots, the shared 180-second deadline, 45-second overlap and two-second health requirements.
+
+| Run | Initial reply spread | Full overlap | Completion median | Completion p95 | Acceptance |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Baseline A | 12.090 s | 49.852 s | 70.136 s | 76.161 s | PASS |
+| Candidate A | 12.229 s | 49.792 s | 70.061 s | 76.040 s | PASS |
+| Baseline B | 12.153 s | 49.846 s | 70.371 s | 76.463 s | PASS |
+| Candidate B | 12.436 s | 49.827 s | 70.302 s | 76.371 s | PASS |
+
+All four runs complete exactly 200 replies, settle all three fence principals and leave zero producer, journal or outbox debt after clean shutdown.
+The candidate does not demonstrate a worthwhile startup gain: initial reply spread is slightly worse in both comparisons, and completion latency is nearly unchanged.
+Removing this read changes neither transaction count nor worker handoffs; a lower query count alone does not justify expanding the production call signatures.
+Restore the original production code and remove the query-count tests tied to the rejected implementation.
+Keep the existing writer and durability policy; reconsider this optimization only with new evidence of a worthwhile end-to-end gain.
+
+Retain the useful leave/rejoin test covering both single and separate batches on SQLite and Postgres.
+An initial full run exposed a 500 ms guard in the projection-progress test; a controlled 650 ms delay after successful admission reproduced that failure without changing the database result.
+That test now sets a 30-second retry backoff and a two-second hang guard, retaining the requirement that admission progress independently of unrelated retries while allowing ordinary database latency.
+The controlled-delay probe passes, and scoped review confirms that waiting for another recovery pass still fails the adjusted test.
+Production retry timing is unchanged.
+Final retained-tree verification passes 15,544 tests with 22 skipped and 15 warnings in 87.87 seconds; production source matches the measured baseline exactly.
+
+The four retained controls are `control-200-20260906T144825Z`, `control-200-20260906T145836Z`, `control-200-20260906T150134Z` and `control-200-20260906T150430Z` under `query-reuse` in the capacity workspace.
+
+## Remaining writer time
+
+The earlier correlated trace on the retained production code attributes the 13.357-second startup window as follows.
+Each operation category includes its worker submission, execution and completion propagation, so these categories can be added without counting shared wait time twice.
+
+| Operation category | Exclusive writer occupancy |
+| --- | ---: |
+| Delivery/outbox: enqueue, claim, sending-device binding and acknowledgment | 4.407 s |
+| Batch admission | 3.242 s |
+| Handled-turn ledger writes | 2.802 s |
+| Conversation hydration | 2.225 s |
+| Event settlement | 0.669 s |
+| Writer unoccupied | 0.012 s |
+
+Across those categories, 0.491 seconds is worker submission, 10.242 seconds worker execution and 2.612 seconds completion propagation; worker thread CPU is only 0.971 seconds.
+Those phase totals and the separate native synchronization samples overlap the table and must not be added to it.
+This identifies the application operations occupying the writer, but native symbols still do not resolve every low-level synchronization owner.
+Reply-completion measurements additionally include approximately 60 seconds of synthetic model generation; the table describes startup, not that generation interval.
