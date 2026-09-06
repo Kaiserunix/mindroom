@@ -22,9 +22,10 @@ from tests.conftest import install_call_manager_mock, make_matrix_client_mock
 from tests.test_bot_ready_hook import _router_bot_with_orchestrator
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
-    from mindroom.event_journal import AdmissionFacts, InboundEvent, IngestionRecordAdmission
+    from mindroom.event_journal import AdmissionFacts, EventJournalStore, InboundEvent, IngestionRecordAdmission
     from mindroom.event_journal.backend import Transaction
 
 ROOM = "!grant:localhost"
@@ -207,6 +208,104 @@ async def test_real_member_state_and_timeline_preserve_tenure_and_hooks(  # noqa
         await drain_until(4)
         assert ("$live", True, "join", 1) in observed
         assert [event.event_id for event in await principal.pending() if event.kind is EventKind.MESSAGE] == ["$live"]
+    finally:
+        runner.cancel()
+        with suppress(asyncio.CancelledError):
+            await runner
+        await session.close()
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_real_local_echoes_do_not_hide_later_departure(  # noqa: C901, PLR0915 - complete real source lifecycle
+    tmp_path: Path,
+    journal_database: Callable[[], EventJournalStore],
+) -> None:
+    """Producer epochs fence both departures and admit work after the final rejoin."""
+    account = "@bot:localhost"
+    principal = journal_database().principal(account)
+    consumer = await principal.load_or_create_ingestion_consumer(new_generation=uuid4())
+    client = nio.AsyncClient("https://localhost", account, device_id="DEVICE")
+    client.restore_login(account, "DEVICE", "token")
+    session = open_durable_sync(client, consumer_id=consumer.generation, store_path=tmp_path / "crypto")
+    await principal.bind_ingestion_stream(generation=consumer.generation, stream_id=session.stream_id)
+    source: asyncio.Queue[bytes] = asyncio.Queue()
+    local_calls: list[str] = []
+    effects: list[tuple[str, int]] = []
+
+    async def request(_method: str, path: str, *_args: object, **_kwargs: object) -> bytes:
+        if "/sync" in path:
+            return await source.get()
+        local_calls.append(path)
+        return b"{}"
+
+    async def after(record: IngestionRecordAdmission, _facts: AdmissionFacts, _provenance: object) -> None:
+        if record.membership is not None:
+            position = await principal.membership_position(ROOM)
+            effects.append((position.membership, position.membership_epoch))
+
+    session._transport.request = request
+    session._maintain_crypto = AsyncMock()
+    runner = asyncio.create_task(session.run())
+
+    async def consume() -> bool:
+        batch = await session.next_batch()
+        if batch is None:
+            await session.wait_for_work()
+            return False
+        await consume_one_ingestion_batch(session, principal, account_id=account, after_admission=after)
+        return batch.completes_sync
+
+    async def sync(cursor: str, events: list[dict[str, object]], *, leave: bool = False) -> None:
+        body = json.loads(_response(cursor, [], events))
+        if leave:
+            body["rooms"]["leave"] = body["rooms"].pop("join")
+        await source.put(json.dumps(body).encode())
+        async with asyncio.timeout(5):
+            while not await consume():
+                pass
+
+    async def local(target: str) -> None:
+        await session.wait_for_membership_idle()
+        position = await principal.membership_position(ROOM)
+        assert await session.change_membership(
+            operation_id=uuid4(),
+            room_id=ROOM,
+            previous_membership=position.membership,
+            previous_epoch=position.membership_epoch,
+            current_membership=target,
+        )
+        await consume()
+
+    async def assert_fenced(epoch: int) -> None:
+        position = await principal.membership_position(ROOM)
+        assert (position.membership, position.membership_epoch) == ("leave", epoch)
+        assert not await principal.pending()
+        page = await principal.read_conversation(room_id=ROOM, thread_id=None, limit=10)
+        assert not page.messages
+        assert not await principal.rooms_owing_departure_reports()
+
+    try:
+        await sync("initial", [_member("$initial", account, "join")])
+        await sync("live-zero", [_message("$live-zero")])
+        assert [event.event_id for event in await principal.pending()] == ["$live-zero"]
+        await local("leave")
+        await assert_fenced(1)
+        await sync("leave-echo", [_member("$leave-echo", account, "leave")], leave=True)
+        await local("join")
+        await sync("join-echo", [_member("$join-echo", account, "join")])
+        await sync("live-one", [_message("$live-one")])
+        assert [event.event_id for event in await principal.pending()] == ["$live-one"]
+        await sync("real-leave", [_member("$real-leave", account, "leave")], leave=True)
+        await assert_fenced(2)
+        await sync("real-rejoin", [_member("$real-rejoin", account, "join")])
+        await sync("baseline", [_member("$real-rejoin", account, "join")])
+        await sync("live-two", [_message("$live-two")])
+        assert [event.event_id for event in await principal.pending()] == ["$live-two"]
+        assert effects == [("join", 0), ("leave", 1), ("join", 1), ("leave", 2), ("join", 2)]
+        assert len(local_calls) == 2
+        await session.quiesce()
+        await runner
     finally:
         runner.cancel()
         with suppress(asyncio.CancelledError):

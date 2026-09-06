@@ -257,29 +257,27 @@ def _apply_membership_effect(
 ) -> None:
     """Apply the tenure change before any semantic effect on the same record."""
     room_id = cast("str", admission.room_id)
-    source = cast("DepartureSource", admission.source)
-    if admission.previous_membership == "join":
-        state = _claim_membership_state(transaction, principal_id, room_id)
-        if source is DepartureSource.LOCAL and admission.previous_membership_epoch != state.membership_epoch:
+    state = _claim_membership_state(transaction, principal_id, room_id)
+    if admission.previous_membership_epoch != state.membership_epoch:
+        raise IngestionBatchIntegrityError
+    membership_epoch = cast("int", admission.membership_epoch)
+    if admission.previous_membership == "join" and admission.membership != "join":
+        if state.departure_fenced or membership_epoch != state.membership_epoch + 1:
             raise IngestionBatchIntegrityError
-        _fence_departure_from_state(
+        _advance_membership_epoch(transaction, principal_id, room_id)
+    elif membership_epoch != state.membership_epoch:
+        raise IngestionBatchIntegrityError
+    if admission.membership == "join":
+        note_membership_restarted(transaction, principal_id, room_id)
+    else:
+        _write_departure_state(
             transaction,
             principal_id,
             room_id,
-            source=source,
-            state=state,
+            membership_epoch=membership_epoch,
+            departure_fenced=True,
+            owed_reports=state.owed_reports,
         )
-        return
-    if admission.membership == "join":
-        state = _claim_membership_state(transaction, principal_id, room_id)
-        membership_epoch = cast("int", admission.membership_epoch)
-        if source is DepartureSource.REPORTED and membership_epoch < state.membership_epoch:
-            # A delayed source echo cannot undo a newer durable local departure.
-            return
-        if membership_epoch != state.membership_epoch:
-            raise IngestionBatchIntegrityError
-        note_membership_restarted(transaction, principal_id, room_id)
-    return
 
 
 def _apply_ingestion_disposition(
@@ -721,53 +719,6 @@ def _advance_membership_epoch(
         ),
     )
     return epoch
-
-
-def _fence_departure_from_state(
-    transaction: Transaction,
-    principal_id: str,
-    room_id: str,
-    *,
-    source: DepartureSource,
-    state: _DepartureState,
-) -> DepartureOutcome:
-    """Apply one departure after its room-membership row has been locked."""
-    if source is DepartureSource.REPORTED and state.owed_reports > 0:
-        owed_reports = state.owed_reports - 1
-        _write_departure_state(
-            transaction,
-            principal_id,
-            room_id,
-            membership_epoch=state.membership_epoch,
-            departure_fenced=state.departure_fenced,
-            owed_reports=owed_reports,
-        )
-        return DepartureOutcome(
-            observation=DepartureObservation.OWED_REPORT_CONSUMED,
-            membership_epoch=state.membership_epoch,
-            owed_reports=owed_reports,
-        )
-    if state.departure_fenced:
-        return DepartureOutcome(
-            observation=DepartureObservation.ALREADY_FENCED,
-            membership_epoch=state.membership_epoch,
-            owed_reports=state.owed_reports,
-        )
-    membership_epoch = _advance_membership_epoch(transaction, principal_id, room_id)
-    owed_reports = state.owed_reports + 1 if source is DepartureSource.LOCAL else state.owed_reports
-    _write_departure_state(
-        transaction,
-        principal_id,
-        room_id,
-        membership_epoch=membership_epoch,
-        departure_fenced=True,
-        owed_reports=owed_reports,
-    )
-    return DepartureOutcome(
-        observation=DepartureObservation.FENCED,
-        membership_epoch=membership_epoch,
-        owed_reports=owed_reports,
-    )
 
 
 def fence_departure(

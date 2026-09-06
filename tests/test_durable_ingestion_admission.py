@@ -383,3 +383,23 @@ async def test_auxiliary_replay_reauthenticates_removed_device(
     assert not facts.receipt_new
     assert len(replay.dispatched_events) == 1
     assert not isinstance(replay.dispatched_events[0], AuthenticatedToDeviceEvent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("membership", ["leave", "invite", "ban"])
+async def test_initial_nonjoined_producer_position_stays_fenced(
+    journal_database: Callable[[], EventJournalStore],
+    membership: str,
+) -> None:
+    store = journal_database()
+    stream = uuid4()
+    principal = await principal_for(store, stream)
+    record = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership(None, membership, 0, 0))
+    await consume_one_ingestion_batch(Session(SyncBatch(stream, 1, (record,))), principal, account_id=ACCOUNT)
+    position = await principal.membership_position(ROOM)
+    assert (position.membership, position.membership_epoch) == ("leave", 0)
+    assert not await principal.rooms_owing_departure_reports()
+    record = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership(membership, "join", 0, 0))
+    await consume_one_ingestion_batch(Session(SyncBatch(stream, 2, (record,))), principal, account_id=ACCOUNT)
+    position = await principal.membership_position(ROOM)
+    assert (position.membership, position.membership_epoch) == ("join", 0)
