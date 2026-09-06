@@ -1047,6 +1047,278 @@
     "mindroom": "e276982fdbd3f58b8d471376c417767654819da4",
     "nio": "ce18a1fed0a592b93b789de4480ac3e61e8c3145"
   },
+  "streaming_frequency_diagnostic": {
+    "abba": {
+      "candidate_below_both_controls": true,
+      "candidate_initial_spreads_seconds": [
+        11.492,
+        10.885
+      ],
+      "candidate_matrix_update_totals": [
+        3032,
+        3031
+      ],
+      "control_initial_spreads_seconds": [
+        12.256,
+        12.126
+      ],
+      "control_matrix_update_totals": [
+        5084,
+        5027
+      ]
+    },
+    "archive": {
+      "all_checksums_passed": true,
+      "companion_path": "reproducibility/20260906-sliding-restoration.tar.gz",
+      "companion_sha256": "cb8b04d1404a319346da0cb8b279980bf59c975a7d8fc8e987afafc2933f4618",
+      "compressed_bytes": 266371,
+      "manifested_files": 25,
+      "path": "reproducibility/20260906-review-streaming.tar.gz",
+      "raw_logs_databases_payloads_credentials_excluded": true,
+      "sha256": "535f54ef93f610b865b5a31eeacf4c46d2b7c5d18399961fc1f3c8ad0f79a92b",
+      "standalone_reanalysis_exact_match": true
+    },
+    "constraints": {
+      "all_original_acceptance_predicates_retained": true,
+      "characters_per_second": 80,
+      "concurrent_profilers_or_tests": false,
+      "deadline_seconds": 180,
+      "durability": "FULL",
+      "first_chunk_characters_each_phase": 40,
+      "health_read_timeout_seconds": 2,
+      "minimum_full_overlap_seconds": 45,
+      "preparations": 8,
+      "response_characters": 4800,
+      "roots": 200,
+      "seed": 1,
+      "server": "tuwunel",
+      "subsequent_chunk_characters_abba": [
+        40,
+        400,
+        400,
+        40
+      ],
+      "sync_mode": "sliding",
+      "tool_probability": 0.2
+    },
+    "date": "2026-09-06",
+    "decision": "Keep production streaming behavior; small startup benefit does not warrant a Synapse confirmation or new implementation in this task.",
+    "evidence_directory": "durable-sync-kernel/review-streaming-20260906",
+    "failed_runs": [],
+    "limits": [
+      "Four sequential descriptive runs are not a significance or equivalence test.",
+      "This changes provider wakeups, downstream chunk processing and Matrix edits together; it does not isolate one bottleneck.",
+      "Nominal generation remains 60 seconds but larger synthetic chunks change accumulated scheduling delay and visible update cadence.",
+      "Tool continuations differ despite the same seed and rate because the model hashes assembled history.",
+      "Provider counts include one premeasurement warm-up; reply timing and Matrix update counts cover only the 200 measured replies.",
+      "No new production performance code, changed default, measured production speedup or 1000-reply qualification."
+    ],
+    "production_lines": {
+      "full_nio_pr_added_vs_main": 5193,
+      "full_nio_pr_net_vs_main": -1280,
+      "full_nio_pr_removed_vs_main": 6473,
+      "main_revision": "5b6de3bc6f4aa0c317185953f77c9c8fe3d806a3",
+      "performance_changes": 0,
+      "review_fixes_added": 160,
+      "review_fixes_net": 101,
+      "review_fixes_removed": 59
+    },
+    "runs": [
+      {
+        "acceptance_passed": true,
+        "analysis_status": "complete",
+        "arm_subsequent_chunk_chars": 40,
+        "clean_stops": [
+          true
+        ],
+        "clean_stops_passed": true,
+        "comparison_identity_sha256": "272bc11002e5366898258d294ed5df8fb7a749f7a4fadf028c5bc71d1d76162d",
+        "debt_free": true,
+        "diagnostic_verified": true,
+        "evidence_directory": "tuwunel-sliding-capacity-20260906T195844Z",
+        "matrix_reply_observation_verified": true,
+        "matrix_updates": {
+          "max_per_reply": 28,
+          "median_per_reply": 25.0,
+          "min_per_reply": 25,
+          "p95_per_reply": 27.0,
+          "total": 5084,
+          "total_edits": 4884
+        },
+        "metrics": {
+          "completed_reply_median_seconds": 72.271,
+          "completed_reply_p95_seconds": 78.65729999999999,
+          "full_overlap_seconds": 51.552,
+          "initial_reply_median_seconds": 6.127,
+          "initial_reply_p95_seconds": 12.257,
+          "initial_reply_spread_seconds": 12.256,
+          "last_completion_from_first_input_seconds": 79.289
+        },
+        "missing_files": [],
+        "provider": {
+          "first_chunk_chars_each_phase": 40,
+          "includes_premeasurement_warmup": true,
+          "phase_count": 251,
+          "response_count": 201,
+          "tool_continuation_count": 50,
+          "total_chars": 964800,
+          "total_chunks": 24169,
+          "total_nominal_delay_seconds": 12060.0
+        },
+        "provider_phases_verified": true,
+        "reply_count": 200,
+        "source_unchanged": true
+      },
+      {
+        "acceptance_passed": true,
+        "analysis_status": "complete",
+        "arm_subsequent_chunk_chars": 400,
+        "clean_stops": [
+          true
+        ],
+        "clean_stops_passed": true,
+        "comparison_identity_sha256": "272bc11002e5366898258d294ed5df8fb7a749f7a4fadf028c5bc71d1d76162d",
+        "debt_free": true,
+        "diagnostic_verified": true,
+        "evidence_directory": "tuwunel-sliding-capacity-20260906T200146Z",
+        "matrix_reply_observation_verified": true,
+        "matrix_updates": {
+          "max_per_reply": 17,
+          "median_per_reply": 15.0,
+          "min_per_reply": 15,
+          "p95_per_reply": 16.0,
+          "total": 3032,
+          "total_edits": 2832
+        },
+        "metrics": {
+          "completed_reply_median_seconds": 68.887,
+          "completed_reply_p95_seconds": 74.53829999999999,
+          "full_overlap_seconds": 49.867,
+          "initial_reply_median_seconds": 6.2795000000000005,
+          "initial_reply_p95_seconds": 11.674100000000001,
+          "initial_reply_spread_seconds": 11.492,
+          "last_completion_from_first_input_seconds": 75.236
+        },
+        "missing_files": [],
+        "provider": {
+          "first_chunk_chars_each_phase": 40,
+          "includes_premeasurement_warmup": true,
+          "phase_count": 242,
+          "response_count": 201,
+          "tool_continuation_count": 41,
+          "total_chars": 964800,
+          "total_chunks": 2688,
+          "total_nominal_delay_seconds": 12060.0
+        },
+        "provider_phases_verified": true,
+        "reply_count": 200,
+        "source_unchanged": true
+      },
+      {
+        "acceptance_passed": true,
+        "analysis_status": "complete",
+        "arm_subsequent_chunk_chars": 400,
+        "clean_stops": [
+          true
+        ],
+        "clean_stops_passed": true,
+        "comparison_identity_sha256": "272bc11002e5366898258d294ed5df8fb7a749f7a4fadf028c5bc71d1d76162d",
+        "debt_free": true,
+        "diagnostic_verified": true,
+        "evidence_directory": "tuwunel-sliding-capacity-20260906T200437Z",
+        "matrix_reply_observation_verified": true,
+        "matrix_updates": {
+          "max_per_reply": 17,
+          "median_per_reply": 15.0,
+          "min_per_reply": 15,
+          "p95_per_reply": 16.0,
+          "total": 3031,
+          "total_edits": 2831
+        },
+        "metrics": {
+          "completed_reply_median_seconds": 68.6845,
+          "completed_reply_p95_seconds": 74.02145,
+          "full_overlap_seconds": 50.201,
+          "initial_reply_median_seconds": 5.9544999999999995,
+          "initial_reply_p95_seconds": 11.3528,
+          "initial_reply_spread_seconds": 10.885,
+          "last_completion_from_first_input_seconds": 74.857
+        },
+        "missing_files": [],
+        "provider": {
+          "first_chunk_chars_each_phase": 40,
+          "includes_premeasurement_warmup": true,
+          "phase_count": 239,
+          "response_count": 201,
+          "tool_continuation_count": 38,
+          "total_chars": 964800,
+          "total_chunks": 2682,
+          "total_nominal_delay_seconds": 12060.0
+        },
+        "provider_phases_verified": true,
+        "reply_count": 200,
+        "source_unchanged": true
+      },
+      {
+        "acceptance_passed": true,
+        "analysis_status": "complete",
+        "arm_subsequent_chunk_chars": 40,
+        "clean_stops": [
+          true
+        ],
+        "clean_stops_passed": true,
+        "comparison_identity_sha256": "272bc11002e5366898258d294ed5df8fb7a749f7a4fadf028c5bc71d1d76162d",
+        "debt_free": true,
+        "diagnostic_verified": true,
+        "evidence_directory": "tuwunel-sliding-capacity-20260906T200725Z",
+        "matrix_reply_observation_verified": true,
+        "matrix_updates": {
+          "max_per_reply": 27,
+          "median_per_reply": 25.0,
+          "min_per_reply": 25,
+          "p95_per_reply": 26.0,
+          "total": 5027,
+          "total_edits": 4827
+        },
+        "metrics": {
+          "completed_reply_median_seconds": 70.205,
+          "completed_reply_p95_seconds": 76.00115000000001,
+          "full_overlap_seconds": 49.87,
+          "initial_reply_median_seconds": 6.265499999999999,
+          "initial_reply_p95_seconds": 12.23115,
+          "initial_reply_spread_seconds": 12.126,
+          "last_completion_from_first_input_seconds": 76.274
+        },
+        "missing_files": [],
+        "provider": {
+          "first_chunk_chars_each_phase": 40,
+          "includes_premeasurement_warmup": true,
+          "phase_count": 229,
+          "response_count": 201,
+          "tool_continuation_count": 28,
+          "total_chars": 964800,
+          "total_chunks": 24148,
+          "total_nominal_delay_seconds": 12060.0
+        },
+        "provider_phases_verified": true,
+        "reply_count": 200,
+        "source_unchanged": true
+      }
+    ],
+    "source_revisions": {
+      "mindroom": "2fb726841f7f4c3526b1610ac91eea6afa9fedc1",
+      "nio": "ba75e3a04bb5e333b40617027723e7982d4de09a"
+    },
+    "verification": {
+      "consumer_affected_tests_passed": 200,
+      "consumer_hooks_passed": true,
+      "nio_hooks_passed": true,
+      "nio_mypy_errors": 0,
+      "nio_mypy_source_files": 60,
+      "nio_tests_passed": 863,
+      "nio_tests_skipped": 3
+    }
+  },
   "writer_analysis": [
     {
       "analysis_file": "transaction-path/analysis200-repeat.log",

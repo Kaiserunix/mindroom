@@ -263,3 +263,88 @@ Run sequentially without competing tests or profilers. Compare both pairs;
 confirm on Synapse only if a consistent benefit warrants it. A small or mixed
 result does not justify more code, another serializer or another database.
 The load curve and 1,000-reply qualification remain separate questions.
+
+### Streaming-frequency results
+
+The four sequential Tuwunel Sliding runs use producer
+`ba75e3a04bb5e333b40617027723e7982d4de09a` and consumer
+`2fb726841f7f4c3526b1610ac91eea6afa9fedc1`, with the exact rebuilt wheel. The
+producer fixes all four reported trust/membership/power-state failures. Its full
+suite passes 863 tests with three skipped, mypy is clean across 60 files, and
+repository hooks pass. The consumer passes 200 affected tests and all hooks.
+Producer fixes add 101 net production lines; this experiment adds no production
+code in either repository.
+
+Run directories below are under the persistent capacity evidence workspace at
+`durable-sync-kernel/review-streaming-20260906`. Each has the prefix
+`tuwunel-sliding-capacity-` before the listed UTC run identifier.
+
+| Arm / run | Subsequent chunk chars | Initial median / p95 (s) | Completion median / p95 (s) | Matrix updates | Full overlap (s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A1 / `20260906T195844Z` | 40 | 6.127 / 12.257 | 72.271 / 78.657 | 5,084 | 51.552 |
+| B1 / `20260906T200146Z` | 400 | 6.280 / 11.674 | 68.887 / 74.538 | 3,032 | 49.867 |
+| B2 / `20260906T200437Z` | 400 | 5.954 / 11.353 | 68.684 / 74.021 | 3,031 | 50.201 |
+| A2 / `20260906T200725Z` | 40 | 6.265 / 12.231 | 70.205 / 76.001 | 5,027 | 49.870 |
+
+All four attempts pass every original capacity predicate and the additional
+source/diagnostic checks. Each delivers exactly 200 replies, passes the actual
+Sliding limited-window/restart history probe, retains zero producer input/batch,
+application journal and outbox debt, and shuts down cleanly. No competing tests
+or profilers ran. Source/package/helper/image comparison identity is
+`272bc11002e5366898258d294ed5df8fb7a749f7a4fadf028c5bc71d1d76162d` in all four.
+There were no failed live attempts in this series; earlier campaign failures
+remain recorded above. The offline analyzer was corrected to interpret the
+recorded `clean_stops: [true]` list before final qualification and archive creation.
+
+Matrix updates fell about 40%, from a median of 25 to 15 per reply. Counts include
+the first message: edit counts are respectively 4,884, 2,832, 2,831 and 4,827.
+Provider chunk counts, including the premeasurement warm-up, were 24,169, 2,688,
+2,682 and 24,148. Each arm produced 964,800 characters in total. The default
+consumer already coalesces many model chunks, so a roughly ninefold reduction in
+provider yields does not produce a ninefold reduction in Matrix traffic.
+
+Initial p95 improved 0.58 seconds in A1/B1 and 0.88 seconds in B2/A2; median
+startup was slightly worse in the first pair and slightly better in the second.
+Completion p95 improved 4.12 and 1.98 seconds. Control completion p95 itself varied
+2.66 seconds. These are descriptive paired observations, not significance or
+equivalence claims. The diagnostic changes provider wakeups, downstream chunk
+processing and Matrix edits together; it does not identify which part causes the
+difference. Nominal model generation remains 60 seconds per reply, but fewer
+synthetic sleeps also change accumulated scheduling delay. Real provider timing
+may differ. Tool continuation counts were 50, 41, 38 and 28: seed and probability
+were fixed, while the model hashes assembled histories that differ between runs.
+
+**Decision:** keep current production streaming behavior. This demonstrates a
+modest traffic/cadence tradeoff, with only a small startup benefit. That makes
+chunk-frequency tuning a lower priority for the 200-root workload. It does not
+justify adding buffering, changing defaults or doing a Synapse confirmation in
+this task. No production speedup or 1,000-reply qualification is claimed. The
+first chunk remains prompt in both arms, but subsequent full 400-character chunks
+arrive at nominal five-second intervals instead of half-second intervals.
+
+### Reproduce the streaming diagnostic
+
+The persistent archive is `reproducibility/20260906-review-streaming.tar.gz`,
+with a checksum companion and extracted sibling directory. It contains 25
+manifested files plus the manifest (266,371 compressed bytes), SHA-256
+`535f54ef93f610b865b5a31eeacf4c46d2b7c5d18399961fc1f3c8ad0f79a92b`.
+It preserves all four run manifests, payload-free timestamp/update cohorts,
+provider phase lengths, exact source/package/helper/image identities, frozen
+diagnostic and analysis helpers, and reproduction instructions. Raw logs,
+databases, message bodies, credentials and encrypted test material are excluded.
+
+Standalone reanalysis reproduces every recorded metric and the ABBA comparison
+exactly. From the extracted `streaming-frequency` directory:
+
+```sh
+sha256sum -c MANIFEST.sha256
+uv run --no-project --python 3.13 python helpers/analyze.py --archive-root . --expect-abba
+```
+
+Fresh live reproduction additionally needs the unchanged Sliding companion
+archive described above, with SHA-256
+`cb8b04d1404a319346da0cb8b279980bf59c975a7d8fc8e987afafc2933f4618`.
+The new README specifies the exact producer/consumer revisions from this series,
+the consumer's locked Python 3.13 environment, immutable images, location
+adaptation and sequential `--arm 40`, `400`, `400`, `40` commands. Later
+documentation-only heads are not substituted for those qualified revisions.
