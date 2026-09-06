@@ -355,7 +355,8 @@ A new database process, different driver, larger preparation pool or broad sched
 
 ## Bounded delivery-transaction trial
 
-The next experiment compares two small candidates against the retained production source at `1b10db607`.
+This experiment compared two provisional candidates against the retained production source at `1b10db607`.
+Both were subsequently withdrawn; the proposed API below is not part of the retained architecture.
 First, omit device rebinding only when a fresh claim already committed this worker's sending device.
 Previously attempted deliveries keep the existing reconciliation and pre-send device write, even when the returned marker matches.
 Second, add `enqueue_and_claim_matrix_delivery` to the delivery store view, using the existing enqueue and claim operations in one backend transaction.
@@ -364,11 +365,49 @@ The worker consumes that committed claim through the same post-claim checks used
 Separate enqueue and claim remain available to callers that intentionally persist an intent before a later recovery pass.
 No network call or callback moves into a transaction, and the existing membership, frozen-payload, device-reconciliation, cancellation and INITIAL/FINAL ordering rules remain required.
 
-- [ ] Test that a fresh send's device intent is committed before network I/O without a duplicate device write; keep retry and changed-device coverage.
-- [ ] Implement and benchmark the first candidate against an uninstrumented 200-root control.
-- [ ] Test combined enqueue/claim atomicity, blocked FINAL source handoff, refusal and recovery behavior; then implement the second candidate.
-- [ ] Benchmark the combined candidate under the same FULL durability, eight preparations and original capacity predicates.
-- [ ] Retain only changes with a worthwhile measured result; run the full suite and hooks on the retained tree, self-review, document and push.
+- [x] Test that a fresh send's device intent is committed before network I/O without a duplicate device write; keep retry and changed-device coverage.
+- [x] Implement and benchmark the first candidate against an uninstrumented 200-root control.
+- [x] Test combined enqueue/claim atomicity, blocked FINAL source handoff, refusal and recovery behavior; then implement the second candidate.
+- [x] Benchmark the combined candidate under the same FULL durability, eight preparations and original capacity predicates.
+- [x] Withdraw both candidates, verify the restored tree, self-review and record the result for the authorized push.
 
 Run controls sequentially with fixed source identity and no competing tests or benchmarks.
 If a result is small or inconsistent, do not grow the implementation to rescue it.
+
+### Measured outcome: withdraw both candidates
+
+Candidate A (`91eb09197`) omitted the duplicate fresh-claim device write and added two net production lines.
+Candidate B (`92c19b9dc`) additionally combined live enqueue/claim, adding another 82 net production lines: 84 total versus the pre-trial source.
+Candidate A passed 231 focused tests; candidate B passed 244, including real SQLite/Postgres commit-crash, failed-claim rollback, blocked FINAL handoff, membership refusal and device-recovery cases.
+Both candidates passed scoped repository hooks before measurement.
+A scoped review found no correctness blocker; it identified two fake-only cancellation pause points that would need moving after the combined commit if that candidate were retained.
+Those candidate-specific tests and interfaces are withdrawn with the implementations, rather than expanding the rejected trial.
+
+All four controls use the unchanged workload, FULL durability, eight preparations, no profiler and no competing tests.
+The later baseline checkout at `d59028b0b` has the same production source as `1b10db607`; the two launchers' control implementations and child wrappers are byte-identical.
+All runs verify runtime source, complete 200 replies, settle the three-principal fence, leave zero producer/application/outbox debt and shut down cleanly.
+
+| Source | Initial reply spread | Input to initial median | Input to initial p95 | Completion p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Earlier baseline | 11.983 s | 6.012 s | 11.924 s | 75.561 s |
+| A: fresh claim only | 12.726 s | 6.149 s | 12.626 s | 76.300 s |
+| B: A plus combined enqueue/claim | 12.516 s | 5.580 s | 12.273 s | 75.835 s |
+| Fresh baseline | 13.493 s | 6.593 s | 13.173 s | 80.150 s |
+
+Full overlaps are respectively 49.873, 49.651, 49.713 and 50.629 seconds; every original capacity predicate passes.
+Initial latency uses each exact workload input and its physical Matrix reply creation timestamp, deduplicating projections across principals.
+Completion includes approximately 60 seconds of synthetic generation.
+The combined candidate has a promising median in one run, but neither candidate improves the earlier baseline's startup tail; both spreads lie inside the two controls' range.
+These few runs do not establish statistical equivalence, rule out small gains, or attribute the slower final control to a particular cause.
+They provide insufficient evidence to keep 84 extra production lines for a startup optimization.
+Both implementations are withdrawn and the production source, tests and whitelist restored exactly to the pre-trial tree.
+The previously retained ledger-concurrency improvement remains intact; no durability or ownership guarantee changes.
+Do not repeat these candidates without a new workload or evidence that changes the decision; this bounded trial is complete, and 1,000 replies remain unqualified.
+
+Exact revisions, run directories, metrics and result checksums are tracked in `durable-ingestion-performance-results.json` under `delivery_transaction_trial`.
+The persistent `durable-sync-kernel/delivery-transactions` directory contains test logs, all three new control logs, the comparison helper and its output.
+The evidence index records the reproduction addendum.
+
+Final retained-tree verification passes 15,544 tests with 22 skipped and 16 warnings in 121.51 seconds; all consumer hooks, including types and frontend checks, pass.
+Nio documentation hooks pass, and both repositories retain their previously qualified production source.
+Portable re-analysis reproduces all six reported reply timing metrics exactly for each of the four runs from payload-free cohort timestamps.

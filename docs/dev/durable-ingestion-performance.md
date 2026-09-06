@@ -18,7 +18,7 @@ The benchmark result is 200 concurrent conversations with one responder account,
 | Does one fewer membership SELECT help? | No worthwhile end-to-end gain in two alternating comparisons. The nine-line production candidate was withdrawn; useful membership-transition tests remain. | Ledger membership-query section; `durable-sync-kernel/query-reuse`. |
 | Why is the writer occupied without much CPU use? | Live SQLite execution contends for Python execution and then waits for completion propagation through the event loop. Same-SQL isolated replay is much faster, with important limits. | Ledger SQL/native-wait sections; `durable-sync-kernel/transaction-path`. |
 | Should SQLite writes run directly on the event loop? | No useful gain in the diagnostic, and real database contention blocks the loop. Keep the existing writer. | Ledger direct-writer section; transaction-path lock probe and inline run. |
-| What next? | Benchmark fewer complete delivery transactions at existing ownership boundaries, starting with the duplicate device binding after a proven fresh claim. No performance gain is established yet. | Ledger transaction map and required recovery/settlement ordering. |
+| Do fewer delivery transactions improve startup? | Neither tested candidate establishes a repeatable startup-tail improvement. Both are withdrawn; retain the existing delivery path. | Ledger bounded delivery-transaction trial; tracked JSON `delivery_transaction_trial`. |
 
 The latest investigation changes no production code.
 Its measurements explain costs; they do not establish a general speedup, justify weaker durability, or prove all possible failures impossible.
@@ -73,3 +73,26 @@ The original launcher identity hashed the extracted control function rather than
 The package preserves the full available helper files, exact native binaries and a rebuild recipe, but these missing historical facts cannot be recreated as contemporaneous proof.
 New runs should capture complete helper hashes and resolved image IDs at launch.
 The exact native/source probe variants used by the two valid traces are mapped in the package README; the earlier trace child matches its recorded hash.
+
+
+## Delivery-transaction trial addendum
+
+The follow-up tested skipping duplicate fresh-claim device binding and then combining live enqueue/claim, adding two and 84 cumulative net production lines respectively.
+The candidates passed focused correctness checks and all 200-root capacity predicates, but did not establish a repeatable startup-tail benefit against normal controls.
+Both are withdrawn: zero retained production lines, dependencies or guarantee changes.
+The [ledger decision](ledger-write-ownership.md#measured-outcome-withdraw-both-candidates) and tracked JSON retain the median/p95 results, source revisions and limitations.
+
+| Run | Driver directory under `durable-sync-kernel` | Evidence directory |
+| --- | --- | --- |
+| Fresh-claim candidate | `startup-waits/control-200-20260906T162827Z` | `mindroom-live-matrix-fuzz-ba6c5689` |
+| Combined candidate | `startup-waits/control-200-20260906T163429Z` | `mindroom-live-matrix-fuzz-d1624107` |
+| Fresh baseline | `query-reuse/control-200-20260906T163755Z` | `mindroom-live-matrix-fuzz-22048dac` |
+
+The earlier normal control is listed in the main artifact table.
+The persistent `durable-sync-kernel/delivery-transactions` directory preserves the trial logs, comparison script and output; original synthetic databases and application logs remain in each run's evidence directory for cohort re-analysis.
+The separate `reproducibility/20260906-delivery-transactions.tar.gz` addendum freezes the trial results, available helper files and verification logs with a `MANIFEST.sha256` and companion archive checksum.
+It leaves the earlier writer-investigation archive unchanged.
+Use the addendum README for reproduction commands; the original source-verification and historical helper/image-identity limitations still apply.
+
+The addendum contains 120 files (1,034,820 compressed bytes), SHA-256 `93974903f48928b9cafd855af9be18071910c56f6ff79a2a40afa4d533031ae4`.
+Its manifest verifies successfully, and standalone timestamp re-analysis exactly reproduces all six timing metrics for every run.

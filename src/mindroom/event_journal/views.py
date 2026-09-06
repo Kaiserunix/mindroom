@@ -312,24 +312,6 @@ class MatrixDeliveryView(Protocol):
         """Return the current membership epoch for one room."""
         ...
 
-    async def enqueue_and_claim_matrix_delivery(
-        self,
-        *,
-        delivery_id: str,
-        stage: DeliveryStage,
-        room_id: str,
-        thread_id: str | None,
-        payload: Mapping[str, object],
-        result: Mapping[str, object] | None = None,
-        event_type: str = "m.room.message",
-        edits_event_id: str | None = None,
-        settle_source_event_ids: tuple[str, ...] = (),
-        permanent_failure_reason: str | None = None,
-        sending_device_id: str | None = None,
-    ) -> tuple[bool, MatrixDelivery | None]:
-        """Return acceptance and the committed claim, which may still be blocked."""
-        ...
-
     async def enqueue_matrix_delivery(
         self,
         *,
