@@ -238,3 +238,28 @@ locked environment, location configuration and immutable image checks. Run
 `--sync-mode sliding`, selecting `--server tuwunel` or `--server synapse5000`.
 Use `--gap-probe` for Sliding history probes and `--profile restart-regression`
 for application restart checks. Keep runtime source frozen during each run.
+
+## Streaming-frequency diagnostic
+
+The next bounded experiment tests whether servicing existing streams delays new
+replies. It follows the review corrections to producer `292ab7d`; the consumer
+must first install an exactly pinned wheel containing those corrections.
+
+Keep the existing 200-root Sliding workload on Tuwunel: 4,800 response characters,
+80 characters per second, deterministic model/tool behavior, FULL durability,
+eight preparations, 180-second deadline, 45-second full overlap, two-second
+health timeout, exact delivery, three-principal fences and empty stores at clean
+shutdown. Compare subsequent chunks of 40 versus 400 characters in ABBA order.
+The first chunk of each model phase stays at 40 characters in both variants:
+the synthetic provider sleeps before yielding, so changing that chunk would
+confound startup overhead with a different first-token delay. Each phase still
+emits the same text and sleeps for the same nominal total duration.
+
+This is an explicitly declared diagnostic override in a source-verified child,
+not a production configuration or a change to the original capacity control.
+Record helper and package hashes, actual Matrix update counts, per-reply
+input/initial/final timestamps, all acceptance predicates and every failed run.
+Run sequentially without competing tests or profilers. Compare both pairs;
+confirm on Synapse only if a consistent benefit warrants it. A small or mixed
+result does not justify more code, another serializer or another database.
+The load curve and 1,000-reply qualification remain separate questions.
