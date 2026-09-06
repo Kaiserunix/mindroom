@@ -46,6 +46,7 @@ import yaml
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Mapping
     from io import TextIOWrapper
+    from typing import Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INSTANCE_REGISTRY = PROJECT_ROOT / "local" / "instances" / "deploy" / "instances.json"
@@ -1933,6 +1934,7 @@ class ManagedTuwunelStack:
         self,
         *,
         profile: str = "fuzz",
+        sync_mode: Literal["classic", "sliding"] = "classic",
         stream_segments: int = 4,
         stream_delay: float = 0.001,
         model_latch_timeout: float = 60.0,
@@ -1947,6 +1949,7 @@ class ManagedTuwunelStack:
             raise ValueError(msg)
         token = secrets.token_hex(4)
         self.profile = profile
+        self.sync_mode = sync_mode
         self.instance_name = f"fuzz{token}"
         self.namespace = self.instance_name
         self.temp_dir = tempfile.TemporaryDirectory(prefix="mindroom-live-matrix-fuzz-")
@@ -2444,6 +2447,7 @@ class ManagedTuwunelStack:
 
     def _write_config(self, model_port: int) -> None:
         config = {
+            "matrix_sync": {"mode": self.sync_mode},
             "models": {
                 "default": {
                     "provider": "openai",
@@ -2473,7 +2477,6 @@ class ManagedTuwunelStack:
             "room_defaults": {"join_policy": "public"},
         }
         if self.profile == "sustained-stream-capacity":
-            config["matrix_sync"] = {"mode": "classic"}
             config["models"]["synthetic"] = {
                 "provider": "synthetic",
                 "id": "lorem-ipsum",
@@ -4434,6 +4437,12 @@ def _non_negative_int(value: str) -> int:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--sync-mode",
+        choices=("classic", "sliding"),
+        default="classic",
+        help="Matrix sync transport used by the managed runtime (default: classic)",
+    )
+    parser.add_argument(
         "--profile",
         choices=(
             "fuzz",
@@ -4531,6 +4540,7 @@ def main() -> None:
 
     stack = ManagedTuwunelStack(
         profile=scenario.profile,
+        sync_mode=args.sync_mode,
         stream_segments=96 if scenario.profile == "short-stream-correctness" else 4,
         stream_delay=0.012 if scenario.profile == "short-stream-correctness" else 0.001,
         # The hard-restart latch spans the later checkpoint wait plus process scheduling.
@@ -4549,7 +4559,12 @@ def main() -> None:
         )
         if scenario.profile != "restart-regression":
             result["seed"] = args.seed if args.trace is None else "trace"
-        payload: dict[str, object] = {**result, **stack.diagnostic_counts(), **host_load.as_dict()}
+        payload: dict[str, object] = {
+            **result,
+            "sync_mode": stack.sync_mode,
+            **stack.diagnostic_counts(),
+            **host_load.as_dict(),
+        }
         print(json.dumps(payload, sort_keys=True))
     except Exception:
         print("Live Matrix fuzz trace:", file=sys.stderr)
