@@ -502,7 +502,7 @@ override-dependencies = [
   "pillow>=11,<12; python_version >= '3.14'",
 ]
 [tool.uv.sources]
-mindroom-nio = { git = "https://github.com/mindroom-ai/mindroom-nio.git", rev = "09d5a25c3623f388e4f435e69b7a523948b11664" }
+mindroom-nio = { git = "https://github.com/mindroom-ai/mindroom-nio.git", rev = "398dae4d7e7079e3dd5e7a3f360b4f1ec2573c6e" }
 
 [tool.ruff]
 target-version = "py312"

@@ -4210,7 +4210,7 @@ async def test_failed_drain_dispatches_buffered_ingress_without_waiting_for_anot
 
 @pytest.mark.asyncio
 async def test_cancelled_drain_cleans_state_for_later_message() -> None:
-    """A cancelled in-flight dispatch should not prevent a fresh later drain."""
+    """A cancelled same-thread dispatch should not prevent a fresh later drain."""
     room = _make_room()
     entered_first_dispatch = asyncio.Event()
     never_release = asyncio.Event()
@@ -4231,9 +4231,9 @@ async def test_cancelled_drain_cleans_state_for_later_message() -> None:
 
     await _admit_ready(
         gate,
-        CoalescingKey("!room:localhost", None, RequesterCoalescingOwner("@user:localhost")),
+        CoalescingKey("!room:localhost", "$thread", RequesterCoalescingOwner("@user:localhost")),
         make_pending_event(
-            _text_event(event_id="$m1", body="first"),
+            _text_event(event_id="$m1", body="first", thread_id="$thread"),
             room,
             source_kind="message",
         ),
@@ -4249,9 +4249,9 @@ async def test_cancelled_drain_cleans_state_for_later_message() -> None:
 
     await _admit_ready(
         gate,
-        CoalescingKey("!room:localhost", None, RequesterCoalescingOwner("@user:localhost")),
+        CoalescingKey("!room:localhost", "$thread", RequesterCoalescingOwner("@user:localhost")),
         make_pending_event(
-            _text_event(event_id="$m2", body="second"),
+            _text_event(event_id="$m2", body="second", thread_id="$thread"),
             room,
             source_kind="message",
         ),
@@ -4263,7 +4263,7 @@ async def test_cancelled_drain_cleans_state_for_later_message() -> None:
 
 @pytest.mark.asyncio
 async def test_cancelled_drain_dispatches_buffered_ingress_without_waiting_for_another_event() -> None:
-    """Ingress buffered behind a cancelled dispatch should get its own follow-up drain."""
+    """Same-thread ingress buffered behind cancellation should get its own follow-up drain."""
     room = _make_room()
     entered_first_dispatch = asyncio.Event()
     never_release = asyncio.Event()
@@ -4284,9 +4284,9 @@ async def test_cancelled_drain_dispatches_buffered_ingress_without_waiting_for_a
 
     await _admit_ready(
         gate,
-        CoalescingKey("!room:localhost", None, RequesterCoalescingOwner("@user:localhost")),
+        CoalescingKey("!room:localhost", "$thread", RequesterCoalescingOwner("@user:localhost")),
         make_pending_event(
-            _text_event(event_id="$m1", body="first"),
+            _text_event(event_id="$m1", body="first", thread_id="$thread"),
             room,
             source_kind="message",
         ),
@@ -4294,9 +4294,9 @@ async def test_cancelled_drain_dispatches_buffered_ingress_without_waiting_for_a
     await entered_first_dispatch.wait()
     await _admit_ready(
         gate,
-        CoalescingKey("!room:localhost", None, RequesterCoalescingOwner("@user:localhost")),
+        CoalescingKey("!room:localhost", "$thread", RequesterCoalescingOwner("@user:localhost")),
         make_pending_event(
-            _text_event(event_id="$m2", body="second"),
+            _text_event(event_id="$m2", body="second", thread_id="$thread"),
             room,
             source_kind="message",
         ),
