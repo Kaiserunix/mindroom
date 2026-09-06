@@ -44,6 +44,7 @@ _.thinking  # unused attribute (src/mindroom/history/summary_call.py)
 start_new_session  # unused variable (src/mindroom/knowledge/refresh_runner.py)
 _.check_hostname  # unused attribute (src/mindroom/matrix/client_session.py)
 _.row_factory  # sqlite row-name access (src/mindroom/event_journal/sqlite_backend.py)
+_.enqueue_matrix_delivery  # explicit unclaimed-intent API; live delivery uses enqueue-and-claim
 _.observation  # public durable departure outcome consumed by callers and tests
 _.uploaded_key_count  # consumed by nio after assignment (src/mindroom/matrix/client_session.py)
 _.verify_mode  # unused attribute (src/mindroom/matrix/client_session.py)

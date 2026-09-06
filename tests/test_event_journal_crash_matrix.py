@@ -37,7 +37,7 @@ from mindroom.event_journal import (
 )
 from mindroom.event_journal.store import _DEFAULT_UNACKNOWLEDGED_LIMIT as _UNACKNOWLEDGED_BATCH
 from mindroom.matrix.journal_ingress import inbound_event, projected_event
-from mindroom.matrix_delivery import MatrixDeliveryWorker, TurnHandoff
+from mindroom.matrix_delivery import MatrixDeliveryWorker, RecoveryOutcome, TurnHandoff
 from mindroom.pending_event_worker import PendingEventWorker
 from tests.conftest import CrashError, DiesAfterAcknowledgement, DiesAfterNextWriteCommit, ignore_delivered_projection
 
@@ -684,6 +684,100 @@ class TestTheHandoffIsOneTransaction:
     source is still pending -- the state a restart turns into a second model
     run for a question that was already answered.
     """
+
+    async def test_live_enqueue_claim_and_source_handoff_survive_the_same_commit(
+        self,
+        runtime: TurnRuntime,
+    ) -> None:
+        """A crash after the first write must retain both frozen intent and source settlement."""
+        await admit(runtime.store)
+        runtime.crashing_backend.armed = True
+        store = EventJournalStore(backend=cast("Any", runtime.crashing_backend)).principal(PRINCIPAL)
+
+        with pytest.raises(CrashError):
+            await store.enqueue_and_claim_matrix_delivery(
+                delivery_id=SOURCE,
+                stage=DeliveryStage.FINAL,
+                room_id=ROOM,
+                thread_id=None,
+                payload={"msgtype": "m.text", "body": "answer"},
+                settle_source_event_ids=(SOURCE,),
+                sending_device_id="DEVICE1",
+            )
+
+        stored = await runtime.store.load_matrix_delivery(delivery_id=SOURCE, stage=DeliveryStage.FINAL)
+        assert stored is not None
+        assert stored.attempted
+        assert stored.sending_device_id == "DEVICE1"
+        assert await runtime.store.pending() == ()
+        assert runtime.homeserver.sends == 0
+        assert await runtime.delivery.recover() == RecoveryOutcome(recovered=1, failed=0)
+        assert runtime.homeserver.room_scans == 0
+
+    async def test_failed_live_claim_rolls_back_intent_and_source_handoff(self, runtime: TurnRuntime) -> None:
+        """Claim failure cannot leave the earlier writes in its transaction committed."""
+        await admit(runtime.store)
+        with (
+            patch("mindroom.event_journal.store.outbox.claim", side_effect=CrashError("claim failed")),
+            pytest.raises(CrashError),
+        ):
+            await runtime.store.enqueue_and_claim_matrix_delivery(
+                delivery_id=SOURCE,
+                stage=DeliveryStage.FINAL,
+                room_id=ROOM,
+                thread_id=None,
+                payload={"msgtype": "m.text", "body": "answer"},
+                settle_source_event_ids=(SOURCE,),
+                sending_device_id="DEVICE1",
+            )
+        assert await runtime.store.load_matrix_delivery(delivery_id=SOURCE, stage=DeliveryStage.FINAL) is None
+        assert [event.event_id for event in await runtime.store.pending()] == [SOURCE]
+
+    async def test_blocked_live_final_still_takes_ownership_of_its_sources(self, runtime: TurnRuntime) -> None:
+        """Accepted intent and a temporarily blocked claim are different outcomes."""
+        await admit(runtime.store)
+        await runtime.store.enqueue_matrix_delivery(
+            delivery_id=SOURCE,
+            stage=DeliveryStage.INITIAL,
+            room_id=ROOM,
+            thread_id=None,
+            payload={"msgtype": "m.text", "body": "working"},
+        )
+        await runtime.store.claim_matrix_delivery(
+            delivery_id=SOURCE,
+            stage=DeliveryStage.INITIAL,
+            sending_device_id="DEVICE1",
+        )
+        accepted, claimed = await runtime.store.enqueue_and_claim_matrix_delivery(
+            delivery_id=SOURCE,
+            stage=DeliveryStage.FINAL,
+            room_id=ROOM,
+            thread_id=None,
+            payload={"msgtype": "m.text", "body": "answer"},
+            settle_source_event_ids=(SOURCE,),
+            sending_device_id="DEVICE1",
+        )
+        assert accepted
+        assert claimed is None
+        assert await runtime.store.pending() == ()
+        final = await runtime.store.load_matrix_delivery(delivery_id=SOURCE, stage=DeliveryStage.FINAL)
+        assert final is not None
+        assert not final.attempted
+
+    async def test_refused_live_enqueue_does_not_claim_a_delivery(self, runtime: TurnRuntime) -> None:
+        """An ended membership cannot gain a new sendable intent."""
+        await admit(runtime.store)
+        await runtime.store.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        assert await runtime.store.enqueue_and_claim_matrix_delivery(
+            delivery_id=SOURCE,
+            stage=DeliveryStage.FINAL,
+            room_id=ROOM,
+            thread_id=None,
+            payload={"msgtype": "m.text", "body": "answer"},
+            settle_source_event_ids=(SOURCE,),
+            sending_device_id="DEVICE1",
+        ) == (False, None)
+        assert await runtime.store.load_matrix_delivery(delivery_id=SOURCE, stage=DeliveryStage.FINAL) is None
 
     async def test_a_settlement_that_cannot_be_written_rolls_the_answer_back(
         self,

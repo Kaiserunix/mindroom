@@ -218,7 +218,7 @@ class MatrixDeliveryWorker:
             nonlocal completed
             handoff = self.handoff if stage is DeliveryStage.FINAL else None
             handed_over = handoff.sources_for_turn(delivery_id) if handoff is not None else ()
-            transaction_id = await self.store.enqueue_matrix_delivery(
+            accepted, claimed = await self.store.enqueue_and_claim_matrix_delivery(
                 delivery_id=delivery_id,
                 stage=stage,
                 event_type=self.event_type,
@@ -229,8 +229,9 @@ class MatrixDeliveryWorker:
                 edits_event_id=edits_event_id,
                 settle_source_event_ids=handed_over,
                 permanent_failure_reason=permanent_failure_reason,
+                sending_device_id=self.sending_device_id,
             )
-            if transaction_id is None:
+            if not accepted:
                 logger.info("matrix_delivery_refused_for_ended_membership", delivery_id=delivery_id, stage=stage.value)
                 completed = _FlushOutcome(event_id=None)
                 return completed
@@ -239,7 +240,8 @@ class MatrixDeliveryWorker:
             if process_shutdown_requested:
                 completed = _FlushOutcome(event_id=None)
                 return completed
-            outcome = await self._flush(
+            outcome = await self._flush_claimed(
+                claimed,
                 delivery_id=delivery_id,
                 stage=stage,
                 process_shutdown_requested=lambda: process_shutdown_requested,
@@ -366,6 +368,24 @@ class MatrixDeliveryWorker:
             stage=stage,
             sending_device_id=self.sending_device_id,
         )
+        return await self._flush_claimed(
+            claimed,
+            delivery_id=delivery_id,
+            stage=stage,
+            process_shutdown_requested=process_shutdown_requested,
+            on_cancelled=on_cancelled,
+        )
+
+    async def _flush_claimed(
+        self,
+        claimed: MatrixDelivery | None,
+        *,
+        delivery_id: str,
+        stage: DeliveryStage,
+        process_shutdown_requested: Callable[[], bool] | None = None,
+        on_cancelled: Callable[[], None] | None = None,
+    ) -> _FlushOutcome:
+        """Continue a committed claim through the shared send/recovery checks."""
         if claimed is None:
             stored = (
                 await self.store.load_matrix_delivery(delivery_id=delivery_id, stage=stage)

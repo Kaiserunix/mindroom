@@ -99,6 +99,40 @@ class _WatchedOutbox:
         """Return the current room membership without timeline noise."""
         return await self.inner.membership_epoch(room_id)
 
+    async def enqueue_and_claim_matrix_delivery(
+        self,
+        *,
+        delivery_id: str,
+        stage: DeliveryStage,
+        room_id: str,
+        thread_id: str | None,
+        payload: Mapping[str, object],
+        result: Mapping[str, object] | None = None,
+        event_type: str = "m.room.message",
+        edits_event_id: str | None = None,
+        settle_source_event_ids: tuple[str, ...] = (),
+        permanent_failure_reason: str | None = None,
+        sending_device_id: str | None = None,
+    ) -> tuple[bool, MatrixDelivery | None]:
+        """Record a live enqueue and its claim without splitting the transaction."""
+        self.timeline.append(f"enqueue:{stage.value}")
+        accepted, claimed = await self.inner.enqueue_and_claim_matrix_delivery(
+            delivery_id=delivery_id,
+            stage=stage,
+            room_id=room_id,
+            thread_id=thread_id,
+            payload=payload,
+            result=result,
+            event_type=event_type,
+            edits_event_id=edits_event_id,
+            settle_source_event_ids=settle_source_event_ids,
+            permanent_failure_reason=permanent_failure_reason,
+            sending_device_id=sending_device_id,
+        )
+        if accepted:
+            self.timeline.append(f"claim:{stage.value}")
+        return accepted, claimed
+
     async def enqueue_matrix_delivery(
         self,
         *,
