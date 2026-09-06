@@ -194,3 +194,62 @@ All producer and consumer Python files match before and after the run. Complete
 repository hooks pass, including ty, frontend checks and generated-document
 checks. Nio's remote Python 3.12/3.13/3.14 tests, types, hooks and coverage also
 pass. No production scheduling change accompanies this dependency update.
+
+
+## Startup throughput follow-up and scale direction
+
+The long-term capacity goal is more than 1,000 concurrent replies.
+This is a design direction, not a capacity guarantee established by the current 200-root controls.
+Measure burst startup, sustained streaming, recovery catch-up, memory, and health responsiveness separately.
+Eight preparation slots bound preparation ownership; they do not limit the number of active model replies.
+Future capacity qualification should increase the same workload through 200, 500, 1,000 and beyond, with explicit hardware and model timing, rather than extrapolating a local database benchmark.
+Retain exact replies, durable admission, recovery, ordering, cancellation and shutdown checks at each size.
+
+A follow-up investigation at MindRoom `556cacacb` and Nio `04c7f72` compared four small prototypes outside production.
+The fresh uninstrumented Tuwunel baseline completed all 200 replies with a 73.392-second median, 84.028-second p95, and 22.539-second initial visibility spread.
+Its 39.233-second full overlap still failed the unchanged 45-second requirement.
+The baseline and all prototype runs settled the fence for all three principals and drained producer, journal and delivery work.
+
+| Experiment | Initial visibility spread | Full overlap |
+| --- | ---: | ---: |
+| Unchanged baseline | 22.539 s | 39.233 s |
+| Batch worker handoffs, retain separate FULL transactions | 21.788 s | 40.156 s |
+| Group queued writes into a FULL commit | 22.820 s | 39.248 s |
+| Repeat grouped commits | 22.520 s | 39.606 s |
+| Exclude already-owned deferrals from ordinary pending payload reads | 22.294 s | 39.499 s |
+| Combine producer capture and initial preparation commits | 21.931 s | 40.064 s |
+
+These trials do not demonstrate a sufficient startup improvement to justify their additional production behavior.
+No writer batching, transaction grouping, pending-query exclusion, or scheduler expansion is adopted from them.
+The producer trial also needs consolidated failure ownership before it could ship: simply nesting existing transactions attempts to close a poisoned store before the outer transaction unwinds.
+A single-run 0.608-second startup difference does not justify changing that boundary.
+Reconsider these candidates only with new measurements demonstrating a worthwhile gain and tests covering their changed failure behavior.
+The group-repeat operation histogram confirms that writes actually grouped; its interrupted final child hash report limits that run's source proof to the parent before/after hashes.
+The other prototype conclusions remain supported by complete runtime source checks.
+
+The timing trace contains two pending-turn writes per root: durable intent before generation and binding of the first visible response event.
+They represent distinct facts, not redundant writes that can simply be removed.
+Ledger waits overlap across concurrent preparations, so their sum is not end-to-end latency or time spent inside SQLite.
+During one diagnostic startup interval, the 392 turn-record transactions used about 1.09 seconds of worker wall time; other admission and settlement work also occupied the shared writer.
+Grouping application-writer commits experimentally did not remove the startup delay.
+Treat the earlier shared-persistence attribution as a waiting location, not proof that disk or the writer design causes the remaining limit.
+
+Keep the simpler producer/application ownership split and FULL durability.
+Any next optimization needs a measured critical path and an unchanged-workload comparison before it becomes production code.
+Do not add a second writer, persistent queue, recovery protocol, serializer dependency, or weaker durability merely to pursue the scale goal.
+The retained `startup-throughput` capacity evidence contains the diagnostic wrappers, exact-cohort analysis, and rejected trials.
+
+
+A separate 100 Hz sampled diagnostic places 8.66 seconds of main-thread sample weight in Nio SQLite commits across the full run, spread across capture, preparation, acknowledgement, and sync completion.
+This measures sampled execution and blocking locations, not CPU-only time or an exact startup critical path.
+The profiled run had a 28.576-second initial visibility spread; instrumentation perturbs timing, so its latency is not an uninstrumented capacity result.
+This trace motivated the producer transaction trial above; neither result establishes the Matrix server as the cause of the remaining delay.
+
+
+This investigation leaves production code unchanged in both repositories.
+The remaining startup bottleneck is unresolved; the negative experiments do not qualify Tuwunel at the 200-root target or establish capacity for 1,000 active replies.
+The next useful investigation is an exact-startup trace of producer processing, streaming traffic and scheduling together, rather than another isolated writer optimization.
+
+Verification for this documentation follow-up: 15,522 consumer tests passed, with 22 skipped and 16 warnings; all repository hooks passed.
+The producer suite passed 700 tests with three skipped, its full type check reported no issues in 58 source files, and its repository hooks passed.
+Installed producer and consumer source hashes still match the tested commits; both production deltas are zero.
