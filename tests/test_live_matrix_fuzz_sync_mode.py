@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import sys
+from typing import Literal
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
 
 from mindroom.config.main import Config
+from mindroom.orchestration.config_updates import build_config_update_plan
 from scripts.testing import fuzz_live_matrix as fuzz
 
 
@@ -56,3 +59,26 @@ def test_cli_sync_mode_reaches_generated_config(
     fuzz.main()
 
     assert json.loads(capsys.readouterr().out)["sync_mode"] == expected_mode
+
+
+@pytest.mark.parametrize("mode", ["classic", "sliding"])
+def test_restart_profile_config_really_replaces_both_bots(mode: Literal["classic", "sliding"]) -> None:
+    """Catch a reload trigger that applies in place instead of exercising restart."""
+    stack = fuzz.ManagedTuwunelStack(profile="restart-regression", sync_mode=mode)
+    try:
+        stack._write_config(9292)
+        old = Config.model_validate(yaml.safe_load(stack.config_path.read_text()))
+        stack.apply_replacement_config("!restart:example")
+        new = Config.model_validate(yaml.safe_load(stack.config_path.read_text()))
+        entities = {"general", "router"}
+        plan = build_config_update_plan(
+            current_config=old,
+            new_config=new,
+            configured_entities=entities,
+            existing_entities=entities,
+            agent_bots={entity: AsyncMock() for entity in entities},
+        )
+        assert plan.entities_to_restart == {"general", "router"}
+        assert new.matrix_sync == old.matrix_sync
+    finally:
+        stack.close()

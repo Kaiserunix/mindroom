@@ -43,6 +43,8 @@ from urllib.parse import quote
 import httpx
 import yaml
 
+from mindroom.prompts import AGENT_IDENTITY_CONTEXT_TEMPLATE
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Mapping
     from io import TextIOWrapper
@@ -2118,10 +2120,16 @@ class ManagedTuwunelStack:
         return _wait_until(lambda: self.log_count(*markers) >= minimum, timeout=timeout)
 
     def apply_replacement_config(self, room_id: str) -> None:
-        """Add the dormant room and switch only the managed agent to its latch model."""
+        """Replace both bots, add the dormant room and arm only the agent's latch."""
         config = yaml.safe_load(self.config_path.read_text(encoding="utf-8"))
         config["agents"][AGENT_NAME]["rooms"].append(room_id)
         config["models"]["default"]["id"] = RESTART_MODEL_ID
+        # Room/model changes alone now apply in place; change a construction input.
+        prompts = config.setdefault("prompts", {})
+        prompts["AGENT_IDENTITY_CONTEXT_TEMPLATE"] = (
+            prompts.get("AGENT_IDENTITY_CONTEXT_TEMPLATE", AGENT_IDENTITY_CONTEXT_TEMPLATE)
+            + "\nThis is the replacement generation for the restart regression."
+        )
         self._replace_config(config)
 
     def _set_model_id(self, model_id: str) -> None:
