@@ -2286,18 +2286,32 @@ class ManagedTuwunelStack:
         """Return the journal's composite principal identity for one managed bot."""
         return f"{agent_name}@{matrix_id}"
 
-    def _restart_sync_checkpoint_token(self) -> str | None:
-        """Read the managed agent's exact durable Classic sync token."""
-        continuity_path = self.storage_path / "sync_continuity" / f"{AGENT_NAME}.json"
-        if not continuity_path.is_file():
-            return None
-        payload = json.loads(continuity_path.read_text(encoding="utf-8"))
-        checkpoint = payload.get("checkpoint") if isinstance(payload, dict) else None
-        token = checkpoint.get("token") if isinstance(checkpoint, dict) else None
-        return token if isinstance(token, str) and token else None
+    def _restart_source_settled(self) -> bool:
+        """Read committed producer progress without interpreting opaque sync tokens."""
+        found = False
+        for path in (self.storage_path / "encryption_keys").glob("*/*.db"):
+            with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as database:
+                if not database.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='NioDurableMeta'",
+                ).fetchone():
+                    continue
+                row = database.execute(
+                    """
+                    SELECT cursor IS NOT NULL
+                        AND NOT EXISTS (SELECT 1 FROM NioDurableInput)
+                        AND NOT EXISTS (SELECT 1 FROM NioDurableBatch)
+                    FROM NioDurableMeta WHERE user_id=?
+                    """,
+                    (self.agent_id,),
+                ).fetchone()
+            if row is not None:
+                if not row[0]:
+                    return False
+                found = True
+        return found
 
     def wait_for_restart_event_checkpoint(self, room_id: str, event_id: str, *, timeout: float) -> bool:
-        """Wait for a checkpoint strictly later than durable projection of one event."""
+        """Wait for exact event projection and producer settlement before hard restart."""
         deadline = time.monotonic() + timeout
         event_projected = _wait_until(
             lambda: self._restart_event_projected_for_agent(room_id, event_id),
@@ -2305,12 +2319,8 @@ class ManagedTuwunelStack:
         )
         if not event_projected:
             return False
-        checkpoint_at_projection_observation = self._restart_sync_checkpoint_token()
         return _wait_until(
-            lambda: (
-                (current := self._restart_sync_checkpoint_token()) is not None
-                and current != checkpoint_at_projection_observation
-            ),
+            self._restart_source_settled,
             timeout=max(deadline - time.monotonic(), 0),
         )
 

@@ -16,16 +16,16 @@ from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 import httpx
 import pytest
 import yaml
+from nio.durable.store import DurableStore
 
 from mindroom.config.main import Config
 from mindroom.event_journal import DeliveryStage, EventClass, EventJournalStore, EventKind, InboundEvent
 from mindroom.matrix.conversation_hydration import ConversationHydrator
-from mindroom.matrix.sync_continuity import SyncContinuityStore
-from mindroom.matrix.sync_token_values import SyncCheckpoint
 from scripts.testing import fuzz_live_matrix
 from scripts.testing.fuzz_live_matrix import (
     DEFAULT_ROOT_FANOUT,
@@ -2022,8 +2022,9 @@ def test_restart_regression_projection_probe_does_not_create_an_empty_database()
         stack.close()
 
 
-def test_restart_regression_waits_for_checkpoint_later_than_fresh_event() -> None:
-    """The hard-restart boundary must be beyond the fresh event's projected response."""
+@pytest.mark.parametrize("debt", ["input", "batch"])
+def test_restart_regression_waits_for_projected_event_and_drained_source(debt: str) -> None:
+    """Projection alone cannot cross the restart boundary before producer settlement."""
     stack = ManagedTuwunelStack()
     writer: threading.Thread | None = None
     try:
@@ -2052,16 +2053,30 @@ def test_restart_regression_waits_for_checkpoint_later_than_fresh_event() -> Non
                 (f"general@{stack.agent_id}", "!target:example", "$fresh", "$fresh"),
             )
             fixture_database.commit()
-        continuity_store = SyncContinuityStore(stack.storage_path, "general")
-        continuity_store._replace_checkpoint(
-            SyncCheckpoint("s_before", store_generation="generation"),
-        )
+        for name, user in (("router", "@router:example"), ("general", stack.agent_id)):
+            producer = DurableStore(
+                stack.storage_path / "encryption_keys" / name,
+                user_id=user,
+                device_id="DEVICE",
+                consumer_id=uuid4(),
+            )
+            with producer.transaction():
+                producer.set_cursor("opaque-unchanged-position")
+                if name == "general":
+                    if debt == "input":
+                        producer.capture(b"{}")
+                    else:
+                        producer.publish((), completes_sync=True)
+            producer_path = producer.path
+            producer.close()
+        assert not stack.wait_for_restart_event_checkpoint("!target:example", "$fresh", timeout=0.01)
 
         def advance_checkpoint() -> None:
             time.sleep(0.1)
-            continuity_store._replace_checkpoint(
-                SyncCheckpoint("s_after", store_generation="generation"),
-            )
+            with closing(sqlite3.connect(producer_path)) as database:
+                database.execute("DELETE FROM NioDurableInput")
+                database.execute("DELETE FROM NioDurableBatch")
+                database.commit()
 
         writer = threading.Thread(target=advance_checkpoint)
         writer.start()
