@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Protocol
 
 import nio
@@ -37,20 +38,31 @@ def _record_admission(
     account_id: str,
     schedule_trigger_sender_is_managed: Callable[[str], bool],
 ) -> ej.IngestionRecordAdmission:
-    if record.kind is RecordKind.ROOM_LIFECYCLE:
-        membership = record.membership
-        if membership is None:
+    admission = _record_disposition(record, account_id, schedule_trigger_sender_is_managed)
+    membership = record.membership
+    if membership is None:
+        if record.kind is RecordKind.ROOM_LIFECYCLE:
             message = "Missing own-membership transition"
             raise ej.IngestionBatchValidationError(message)
-        return ej.IngestionRecordAdmission(
-            ej.IngestionRecordDisposition.ROOM_LIFECYCLE,
-            source=ej.DepartureSource(membership.source),
-            room_id=record.room_id,
-            previous_membership=membership.previous,
-            membership=membership.current,
-            previous_membership_epoch=membership.previous_epoch,
-            membership_epoch=membership.current_epoch,
-        )
+        return admission
+    return replace(
+        admission,
+        source=ej.DepartureSource(membership.source),
+        room_id=record.room_id,
+        previous_membership=membership.previous,
+        membership=membership.current,
+        previous_membership_epoch=membership.previous_epoch,
+        membership_epoch=membership.current_epoch,
+    )
+
+
+def _record_disposition(
+    record: SyncRecord,
+    account_id: str,
+    schedule_trigger_sender_is_managed: Callable[[str], bool],
+) -> ej.IngestionRecordAdmission:
+    if record.kind is RecordKind.ROOM_LIFECYCLE:
+        return ej.IngestionRecordAdmission(ej.IngestionRecordDisposition.ROOM_LIFECYCLE)
     if record.kind is RecordKind.LOSS:
         return ej.IngestionRecordAdmission(ej.IngestionRecordDisposition.HISTORY_LOSS, room_id=record.room_id)
     if record.kind is RecordKind.TIMELINE:

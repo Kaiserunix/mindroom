@@ -87,7 +87,7 @@ def validate_ingestion_batch_admission(admission: IngestionBatchAdmission) -> No
         _validate_ingestion_record(record)
 
 
-def _validate_ingestion_record(item: IngestionRecordAdmission) -> None:  # noqa: PLR0915 - application effect grammar
+def _validate_ingestion_record(item: IngestionRecordAdmission) -> None:
     invalid = IngestionBatchValidationError("Invalid ingestion record admission")
 
     def require(condition: object) -> None:
@@ -96,89 +96,25 @@ def _validate_ingestion_record(item: IngestionRecordAdmission) -> None:  # noqa:
 
     require(isinstance(item, IngestionRecordAdmission))
     require(type(item.disposition) is IngestionRecordDisposition)
-
+    _validate_membership_effect(item)
     effect = item.disposition
-    source = item.source
     room_id = item.room_id
-    previous_membership = item.previous_membership
-    membership = item.membership
-    previous_epoch = item.previous_membership_epoch
-    epoch = item.membership_epoch
     e = item.event
     p = item.projected
-    if effect is IngestionRecordDisposition.COMPATIBILITY_ONLY:
-        require(
-            all(
-                value is None
-                for value in (
-                    room_id,
-                    source,
-                    previous_membership,
-                    membership,
-                    previous_epoch,
-                    epoch,
-                    e,
-                    p,
-                )
-            ),
-        )
-        return
-    if effect is IngestionRecordDisposition.HISTORY_LOSS:
-        require(type(room_id) is str and bool(room_id))
-        require(
-            all(
-                value is None
-                for value in (
-                    source,
-                    previous_membership,
-                    membership,
-                    previous_epoch,
-                    epoch,
-                    e,
-                    p,
-                )
-            ),
-        )
-        return
-    if effect is IngestionRecordDisposition.ROOM_LIFECYCLE:
-        require(type(source) is DepartureSource)
-        require(type(room_id) is str and bool(room_id))
-        require(type(membership) is str and membership in _MATRIX_MEMBERSHIPS)
-        require(type(previous_epoch) is type(epoch) is int)
-        lifecycle_previous_epoch = cast("int", previous_epoch)
-        lifecycle_epoch = cast("int", epoch)
-        require(lifecycle_previous_epoch >= 0)
-        if previous_membership is None:
-            require(
-                source is DepartureSource.REPORTED and lifecycle_previous_epoch == lifecycle_epoch == 0,
-            )
-        else:
-            require(
-                type(previous_membership) is str
-                and previous_membership in _MATRIX_MEMBERSHIPS
-                and previous_membership != membership,
-            )
-            departure = previous_membership == "join" and membership != "join"
-            require(lifecycle_epoch == lifecycle_previous_epoch + int(departure))
+    if effect is not IngestionRecordDisposition.SEMANTIC_EVENT:
         require(e is None and p is None)
+        if effect is IngestionRecordDisposition.HISTORY_LOSS:
+            require(type(room_id) is str and bool(room_id))
+        elif effect is IngestionRecordDisposition.ROOM_LIFECYCLE:
+            require(item.membership is not None)
+        elif item.membership is None:
+            require(room_id is None)
         return
-
-    require(effect is IngestionRecordDisposition.SEMANTIC_EVENT)
-    require(
-        all(
-            value is None
-            for value in (
-                source,
-                room_id,
-                previous_membership,
-                membership,
-                previous_epoch,
-                epoch,
-            )
-        ),
-    )
+    if item.membership is None:
+        require(room_id is None)
     require(type(e) is InboundEvent)
     event = cast("InboundEvent", e)
+    require(room_id is None or room_id == event.room_id)
     require(all(type(v) is str and v for v in (event.event_id, event.room_id, event.sender)))
     require(event.thread_id is None or (type(event.thread_id) is str and bool(event.thread_id)))
     require(type(event.kind) is EventKind and type(event.event_class) is EventClass)
@@ -194,6 +130,47 @@ def _validate_ingestion_record(item: IngestionRecordAdmission) -> None:  # noqa:
     require(projected.origin_server_ts == event.origin_server_ts)
     relations = projected.replaces_event_id, projected.redacts_event_id
     require(all(v is None or (type(v) is str and v) for v in relations))
+
+
+def _validate_membership_effect(item: IngestionRecordAdmission) -> None:
+    """Validate own membership independently of the event's disposition."""
+    invalid = IngestionBatchValidationError("Invalid own-membership effect")
+    if item.membership is None:
+        if any(
+            value is not None
+            for value in (
+                item.source,
+                item.previous_membership,
+                item.previous_membership_epoch,
+                item.membership_epoch,
+            )
+        ):
+            raise invalid
+        return
+    if (
+        type(item.source) is not DepartureSource
+        or not isinstance(item.room_id, str)
+        or not item.room_id
+        or item.membership not in _MATRIX_MEMBERSHIPS
+        or type(item.previous_membership_epoch) is not int
+        or type(item.membership_epoch) is not int
+        or item.previous_membership_epoch < 0
+    ):
+        raise invalid
+    if item.previous_membership is None:
+        if (
+            item.source is not DepartureSource.REPORTED
+            or item.previous_membership_epoch != 0
+            or item.membership_epoch != 0
+        ):
+            raise invalid
+    elif (
+        item.previous_membership not in _MATRIX_MEMBERSHIPS
+        or item.previous_membership == item.membership
+        or item.membership_epoch
+        != item.previous_membership_epoch + int(item.previous_membership == "join" and item.membership != "join")
+    ):
+        raise invalid
 
 
 def _matching_semantic_event_exists(
@@ -273,6 +250,38 @@ def _apply_semantic_ingestion_disposition(
     raise IngestionBatchIntegrityError
 
 
+def _apply_membership_effect(
+    transaction: Transaction,
+    principal_id: str,
+    admission: IngestionRecordAdmission,
+) -> None:
+    """Apply the tenure change before any semantic effect on the same record."""
+    room_id = cast("str", admission.room_id)
+    source = cast("DepartureSource", admission.source)
+    if admission.previous_membership == "join":
+        state = _claim_membership_state(transaction, principal_id, room_id)
+        if source is DepartureSource.LOCAL and admission.previous_membership_epoch != state.membership_epoch:
+            raise IngestionBatchIntegrityError
+        _fence_departure_from_state(
+            transaction,
+            principal_id,
+            room_id,
+            source=source,
+            state=state,
+        )
+        return
+    if admission.membership == "join":
+        state = _claim_membership_state(transaction, principal_id, room_id)
+        membership_epoch = cast("int", admission.membership_epoch)
+        if source is DepartureSource.REPORTED and membership_epoch < state.membership_epoch:
+            # A delayed source echo cannot undo a newer durable local departure.
+            return
+        if membership_epoch != state.membership_epoch:
+            raise IngestionBatchIntegrityError
+        note_membership_restarted(transaction, principal_id, room_id)
+    return
+
+
 def _apply_ingestion_disposition(
     transaction: Transaction,
     principal_id: str,
@@ -280,33 +289,9 @@ def _apply_ingestion_disposition(
 ) -> bool:
     """Apply one validated record effect, returning whether it dispatches."""
     disposition = admission.disposition
-    if disposition is IngestionRecordDisposition.COMPATIBILITY_ONLY:
-        return False
-
-    if disposition is IngestionRecordDisposition.ROOM_LIFECYCLE:
-        room_id = cast("str", admission.room_id)
-        source = cast("DepartureSource", admission.source)
-        if admission.previous_membership == "join":
-            state = _claim_membership_state(transaction, principal_id, room_id)
-            if source is DepartureSource.LOCAL and admission.previous_membership_epoch != state.membership_epoch:
-                raise IngestionBatchIntegrityError
-            _fence_departure_from_state(
-                transaction,
-                principal_id,
-                room_id,
-                source=source,
-                state=state,
-            )
-            return False
-        if admission.membership == "join":
-            state = _claim_membership_state(transaction, principal_id, room_id)
-            membership_epoch = cast("int", admission.membership_epoch)
-            if source is DepartureSource.REPORTED and membership_epoch < state.membership_epoch:
-                # A delayed source echo cannot undo a newer durable local departure.
-                return False
-            if membership_epoch != state.membership_epoch:
-                raise IngestionBatchIntegrityError
-            note_membership_restarted(transaction, principal_id, room_id)
+    if admission.membership is not None:
+        _apply_membership_effect(transaction, principal_id, admission)
+    if disposition in {IngestionRecordDisposition.COMPATIBILITY_ONLY, IngestionRecordDisposition.ROOM_LIFECYCLE}:
         return False
 
     if disposition is IngestionRecordDisposition.HISTORY_LOSS:

@@ -64,7 +64,7 @@ async def test_real_owned_batch_replays_after_admission_before_nio_ack(  # noqa:
 
     def open_session() -> tuple[nio.AsyncClient, DurableSync]:
         client = nio.AsyncClient("https://example.org", ACCOUNT, device_id="DEVICE")
-        client.access_token = "token"  # noqa: S105 - fake local credentials
+        client.restore_login(ACCOUNT, "DEVICE", "token")
         session = open_durable_sync(client, consumer_id=consumer.generation, store_path=tmp_path / "crypto")
         return client, session
 

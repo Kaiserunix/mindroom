@@ -107,7 +107,7 @@ class AgentReplyMembershipSync:
         if admission.disposition is IngestionRecordDisposition.HISTORY_LOSS:
             return ReplyMembershipPreAdmission(invalidate_reason="uncertain_sync_response")
         if not (
-            admission.disposition is IngestionRecordDisposition.ROOM_LIFECYCLE
+            admission.membership is not None
             and admission.source is DepartureSource.REPORTED
             and admission.previous_membership == "join"
             and admission.membership != "join"

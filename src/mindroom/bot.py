@@ -104,7 +104,6 @@ from .entity_rooms import get_rooms_for_entity
 from .event_journal import (
     EventJournalStore,
     EventKind,
-    IngestionRecordDisposition,
     PrincipalStore,
     RoomMembershipPosition,
     SemanticConsumer,
@@ -1610,7 +1609,7 @@ class AgentBot:
         timeline_provenance: nio.TimelineEventProvenance | None,
     ) -> None:
         """Apply room effects after their source is durable, retrying unfinished effects."""
-        if admission.disposition is IngestionRecordDisposition.ROOM_LIFECYCLE:
+        if admission.membership is not None:
             await self._apply_ingestion_membership(admission)
         event = admission.event
         if event is None:
