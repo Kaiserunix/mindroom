@@ -2178,7 +2178,7 @@ def test_sustained_stream_capacity_config_uses_managed_sender_and_synthetic_resp
         config = yaml.safe_load(stack.config_path.read_text(encoding="utf-8"))
 
         assert config["matrix_sync"] == {
-            "mode": "sliding",
+            "mode": "classic",
         }
         assert config["agents"]["general"]["model"] == "synthetic"
         assert config["agents"]["load_sender"]["rooms"] == ["lobby"]

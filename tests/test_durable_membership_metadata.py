@@ -192,11 +192,21 @@ async def test_real_member_state_and_timeline_preserve_tenure_and_hooks(  # noqa
         position = await principal.membership_position(ROOM)
         assert (position.membership, position.membership_epoch) == ("join", 1)
         pending = await principal.pending()
-        assert [event.event_id for event in pending if event.kind is EventKind.MESSAGE] == ["$after"]
+        # Rejoining does not authorize the remaining captured history as live.
+        assert [event.event_id for event in pending if event.kind is EventKind.MESSAGE] == []
         assert (await principal.load_event("$leave")).kind is EventKind.ROOM_LIFECYCLE
         assert (await principal.load_event("$rejoin")).kind is EventKind.ROOM_LIFECYCLE
         assert call_manager.on_sync_room_membership.await_count == 3
         assert blocked_leaves == int(block_leave_once)
+        await source.put(
+            _response("three", [_member("$rejoin", account, "join")], []),
+        )
+        await drain_until(3)
+        await bot._runtime_view.agent_reply_memberships.refresh(bot.config, bot.runtime_paths, snapshot)
+        await source.put(_response("four", [], [_member("$live-grant", SENDER, "join"), _message("$live")]))
+        await drain_until(4)
+        assert ("$live", True, "join", 1) in observed
+        assert [event.event_id for event in await principal.pending() if event.kind is EventKind.MESSAGE] == ["$live"]
     finally:
         runner.cancel()
         with suppress(asyncio.CancelledError):

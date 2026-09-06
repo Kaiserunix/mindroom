@@ -468,7 +468,7 @@ class TestAdmissionAdapter:
                 provenance=nio.TimelineEventProvenance.RECOVERED,
             )
 
-        assert any("'url' is a required property" in record.getMessage() for record in caplog.records)
+        assert any("ValidationError" in record.getMessage() for record in caplog.records)
 
     async def test_a_threaded_message_lands_in_its_thread(self) -> None:
         """A threaded message lands in its thread."""

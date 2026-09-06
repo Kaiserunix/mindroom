@@ -10,8 +10,10 @@ import nio
 import pytest
 
 from mindroom.background_tasks import wait_for_background_tasks
-from mindroom.event_journal import AdmissionFacts, RoomMembershipPosition
+from mindroom.event_journal import AdmissionFacts, IngestionBatchAdmission, RoomMembershipPosition
 from tests.test_bot_ready_hook import (
+    _CONSUMER_GENERATION,
+    _STREAM_ID,
     _agent_bot,
     _complete_frame,
     _router_bot_with_orchestrator,
@@ -41,12 +43,14 @@ async def test_owned_departure_reconciles_app_state_on_receipt_replay(
         previous_epoch=0,
     )
     principal = bot.journal_principal()
-    await principal.load_or_create_ingestion_consumer(new_generation=admission.consumer_generation)
-    await principal.bind_ingestion_stream(generation=admission.consumer_generation, stream_id=admission.stream_id)
+    await principal.load_or_create_ingestion_consumer(new_generation=_CONSUMER_GENERATION)
+    await principal.bind_ingestion_stream(generation=_CONSUMER_GENERATION, stream_id=_STREAM_ID)
     await principal.note_membership_restarted(room_id)
-    facts = await principal.admit_ingestion_batch(admission)
+    batch = IngestionBatchAdmission(_STREAM_ID, 1, (admission,))
+    facts = (await principal.admit_ingestion_batch(batch)).record_facts[0]
     if not receipt_new:
-        facts = await principal.admit_ingestion_batch(admission)
+        facts = (await principal.admit_ingestion_batch(batch)).record_facts[0]
+    assert facts.receipt_new is receipt_new
     manager = MagicMock()
     manager.on_sync_room_membership = AsyncMock()
     bot._call_manager = manager

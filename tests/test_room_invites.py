@@ -556,8 +556,8 @@ async def test_startup_already_joined_reconciles_gateway_without_membership_http
         return_value=RoomMembershipPosition("join", 4),
     )
     session = MagicMock()
-    session._wait_for_local_membership_idle = AsyncMock()
-    session._run_local_membership_transition = AsyncMock(return_value=True)
+    session.wait_for_membership_idle = AsyncMock()
+    session.change_membership = AsyncMock(return_value=True)
     bot.journal_principal = MagicMock(return_value=principal)
     bot._ingestion_session = session
     bot._room_lifecycle.deps = replace(
@@ -572,9 +572,9 @@ async def test_startup_already_joined_reconciles_gateway_without_membership_http
 
     await bot.join_configured_rooms()
 
-    session._wait_for_local_membership_idle.assert_awaited_once_with()
+    session.wait_for_membership_idle.assert_awaited_once_with()
     principal.membership_position.assert_awaited_once_with(room_id)
-    session._run_local_membership_transition.assert_not_awaited()
+    session.change_membership.assert_not_awaited()
     bot.client.join.assert_not_awaited()
 
 
@@ -609,8 +609,8 @@ async def test_unconfigured_leave_uses_durable_gateway_without_direct_http(
         return_value=RoomMembershipPosition("join", 4),
     )
     session = MagicMock()
-    session._wait_for_local_membership_idle = AsyncMock()
-    session._run_local_membership_transition = AsyncMock(return_value=True)
+    session.wait_for_membership_idle = AsyncMock()
+    session.change_membership = AsyncMock(return_value=True)
     bot.journal_principal = MagicMock(return_value=principal)
     bot._ingestion_session = session
     bot._room_lifecycle.deps = replace(
@@ -628,7 +628,7 @@ async def test_unconfigured_leave_uses_durable_gateway_without_direct_http(
 
     await bot.leave_unconfigured_rooms()
 
-    session._run_local_membership_transition.assert_awaited_once_with(
+    session.change_membership.assert_awaited_once_with(
         operation_id=UUID("46fba72c-1729-5252-a01c-ca8a8746cc6e"),
         room_id=room_id,
         previous_membership="join",

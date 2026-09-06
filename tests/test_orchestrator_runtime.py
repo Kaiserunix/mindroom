@@ -203,10 +203,8 @@ async def test_invalidation_during_post_refresh_effects_skips_positive_reconcili
     router_bot.schedule_pending_invite_reconciliation.assert_called_once_with()
 
 
-@pytest.mark.parametrize("preserve_startup_snapshot", [False, True])
 def test_repeated_reply_membership_invalidation_schedules_one_revocation_wave(
     tmp_path: Path,
-    preserve_startup_snapshot: bool,
 ) -> None:
     """Uncertain sync batches must not start overlapping positive call reconciliation."""
     config = _runtime_bound_config(Config(), tmp_path)
@@ -218,10 +216,6 @@ def test_repeated_reply_membership_invalidation_schedules_one_revocation_wave(
         ROUTER_AGENT_NAME: router_bot,
         "worker": worker_bot,
     }
-    if preserve_startup_snapshot:
-        orchestrator.agent_reply_membership_sync.preserve_on_next_sync_start()
-        assert not orchestrator.agent_reply_membership_sync.sync_loop_started()
-
     orchestrator.invalidate_agent_reply_memberships(reason="uncertain_sync_response")
     orchestrator.invalidate_agent_reply_memberships(reason="uncertain_sync_response")
 

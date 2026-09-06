@@ -2473,7 +2473,7 @@ class ManagedTuwunelStack:
             "room_defaults": {"join_policy": "public"},
         }
         if self.profile == "sustained-stream-capacity":
-            config["matrix_sync"] = {"mode": "sliding", "sliding_timeline_limit": 100}
+            config["matrix_sync"] = {"mode": "classic"}
             config["models"]["synthetic"] = {
                 "provider": "synthetic",
                 "id": "lorem-ipsum",
