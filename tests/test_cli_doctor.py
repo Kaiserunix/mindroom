@@ -18,6 +18,7 @@ from mindroom.cli.doctor import (
     doctor,
 )
 from mindroom.config.main import Config
+from mindroom.config.matrix import MatrixSyncConfig
 from mindroom.config.models import RouterConfig
 from mindroom.constants import resolve_primary_runtime_paths
 from mindroom.credentials_sync import get_embedder_api_key
@@ -228,3 +229,22 @@ def test_homeserver_check_ignores_msc4186_for_classic_mode(
     )
 
     assert _check_matrix_homeserver(_doctor_runtime_paths(tmp_path), config=Config()) == (1, 0, 0)
+
+
+@pytest.mark.parametrize("advertised", [True, False, "true", None])
+def test_homeserver_check_requires_advertised_sliding_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    advertised: object,
+) -> None:
+    """Sliding configuration reports incompatible servers before bot startup."""
+    config = Config()
+    config.matrix_sync = MatrixSyncConfig.model_construct(mode="sliding")
+    monkeypatch.setattr(
+        "mindroom.cli.doctor.httpx.get",
+        lambda *_args, **_kwargs: _versions_response(
+            {"versions": ["v1.11"], "unstable_features": {"org.matrix.simplified_msc3575": advertised}},
+        ),
+    )
+    expected = (1, 0, 0) if advertised is True else (0, 1, 0)
+    assert _check_matrix_homeserver(_doctor_runtime_paths(tmp_path), config=config) == expected

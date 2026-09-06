@@ -14,7 +14,6 @@ from nio.crypto import DeviceStore, OlmDevice
 from nio.durable import RecordKind, SyncBatch, SyncRecord
 from nio.durable.model import CryptoEvidence, OwnMembership
 
-from mindroom.config.matrix import MatrixSyncConfig
 from mindroom.constants import STREAM_STATUS_KEY
 from mindroom.event_journal import (
     AdmissionFacts,
@@ -174,11 +173,6 @@ async def test_empty_completion_retries_until_after_sync_succeeds(tmp_path: Path
     assert len(attempts) == 2
     assert session.acked == [batch]
     await store.close()
-
-
-def test_classic_only_configuration() -> None:
-    with pytest.raises(ValueError, match="classic"):
-        MatrixSyncConfig(mode="sliding")
 
 
 @pytest.mark.parametrize(

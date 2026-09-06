@@ -19,7 +19,9 @@ from mindroom.embedder_health import probe_embedder, semantic_embedder_configure
 from mindroom.embedding_errors import EMBEDDER_UNREACHABLE_DETAIL
 from mindroom.embeddings import create_sentence_transformers_embedder
 from mindroom.matrix.health import (
+    MSC4186_UNSTABLE_FEATURE,
     matrix_versions_url,
+    response_advertises_sliding_sync,
     response_has_matrix_versions,
 )
 from mindroom.model_defaults import OLLAMA_HOST_DEFAULT
@@ -697,7 +699,6 @@ def _validate_sentence_transformers_embedder(runtime_paths: RuntimePaths, model:
 
 def _check_matrix_homeserver(runtime_paths: RuntimePaths, config: Config | None = None) -> tuple[int, int, int]:
     """Check Matrix homeserver reachability. Returns (passed, failed, warnings)."""
-    del config
     homeserver = constants.runtime_matrix_homeserver(runtime_paths=runtime_paths)
     url = matrix_versions_url(homeserver)
     try:
@@ -706,6 +707,14 @@ def _check_matrix_homeserver(runtime_paths: RuntimePaths, config: Config | None 
         console.print(f"[red]✗[/red] Matrix homeserver unreachable: {homeserver} ({exc})")
         return 0, 1, 0
     if response_has_matrix_versions(response):
+        sliding_configured = config is not None and config.matrix_sync.mode == "sliding"
+        if sliding_configured and not response_advertises_sliding_sync(response):
+            console.print(
+                f"[red]✗[/red] Matrix homeserver does not advertise MSC4186 Simplified Sliding Sync"
+                f" ({MSC4186_UNSTABLE_FEATURE}): {homeserver}."
+                " Set matrix_sync.mode: classic or upgrade the homeserver.",
+            )
+            return 0, 1, 0
         console.print(f"[green]✓[/green] Matrix homeserver: {homeserver}")
         return 1, 0, 0
     detail = f"HTTP {response.status_code}" if not response.is_success else "returned invalid /versions payload"

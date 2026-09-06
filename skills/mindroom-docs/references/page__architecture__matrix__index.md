@@ -83,9 +83,13 @@ Use `build_message_content()` from `message_builder.py` to construct thread-awar
 
 Each agent bot runs an owned Nio ingestion session with a five-second long-polling timeout.
 The default `matrix_sync.mode: classic` streams events through classic `/v3/sync` and backfills limited-timeline gaps from `/messages`.
-Only Classic sync is supported; explicit Sliding configuration is rejected.
+Set `matrix_sync.mode: sliding` to use MSC4186 Simplified Sliding Sync on homeservers advertising `org.matrix.simplified_msc3575`.
+Each agent uses a stable connection ID, a discovery range of `[0,99]`, and explicit subscriptions for its configured resolved rooms.
+Subscriptions refresh after deferred joins and room configuration changes without replacing the durable session or discarding accepted input.
+`matrix_sync.sliding_timeline_limit` defaults to 100 events per room window.
+A durable store is bound to its transport; changing this setting does not convert an existing store.
 Nio owns transport cursors, crypto preparation, and persisted per-event provenance.
-Classic Sync distinguishes initial history, live continuations, and recovered gaps; MindRoom uses the provenance Nio supplies without reclassifying it.
+Both transports distinguish initial history, live continuations, and recovered gaps; MindRoom uses the provenance Nio supplies without reclassifying it.
 This provenance remains attached across recovery, restart, and decryption independently of journal checkpoint persistence.
 `matrix/durable_ingestion.py` converts one trusted Nio batch and atomically commits its receipt, ordered membership effects, semantic events, and conversation projection in the MindRoom journal before acknowledging that batch to Nio.
 An admission failure leaves the batch unsettled for retry, and replay after a committed admission returns the original receipt without duplicating semantic work.

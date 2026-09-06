@@ -624,9 +624,11 @@ matrix_space:
 
 # Matrix sync transport (optional)
 # classic uses /v3/sync and backfills limited-timeline gaps from /messages.
-# Only Classic sync is supported; explicit Sliding configuration is rejected.
+# sliding uses MSC4186 Simplified Sliding Sync on compatible homeservers.
+# A durable store remains bound to the transport it first used.
 matrix_sync:
   mode: classic                    # Default: classic
+  sliding_timeline_limit: 100       # Per-room Sliding window, minimum 1
 
 # Timezone for scheduled tasks (optional)
 timezone: America/Los_Angeles      # Default: UTC

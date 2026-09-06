@@ -131,11 +131,14 @@ def test_bot_ingestion_config_freezes_existing_transport_settings(tmp_path: Path
     config = _runtime_bound_config(Config(), tmp_path)
     ingestion = bot_ingestion_config(
         config,
+        agent_name="general",
+        room_ids=[],
         timeout_ms=30_000,
         sync_filter={"room": {"timeline": {"limit": 50}}},
     )
     assert ingestion.sync_timeout_ms == 30_000
     assert ingestion.sync_filter == {"room": {"timeline": {"limit": 50}}}
+    assert ingestion.sliding is None
 
 
 class TestAgentBot(AgentBotTestBase):

@@ -57,7 +57,7 @@ from mindroom.matrix.room_cleanup import cleanup_all_orphaned_bots
 from mindroom.matrix.rooms import leave_non_dm_rooms
 from mindroom.matrix.state import resolve_room_aliases
 from mindroom.matrix.sync_continuity import SyncContinuityStore
-from mindroom.matrix.sync_loop import bot_ingestion_config
+from mindroom.matrix.sync_loop import bot_ingestion_config, sliding_sync_room_subscriptions
 from mindroom.matrix.users import AgentMatrixUser, login_agent_owned_session
 from mindroom.matrix_delivery import TurnHandoff
 from mindroom.matrix_rtc.call_manager import CallManager, maybe_build_call_manager
@@ -1656,6 +1656,10 @@ class AgentBot:
         """
         await self.join_configured_rooms()
         await self.leave_unconfigured_rooms()
+        if self.config.matrix_sync.mode == "sliding" and self._ingestion_session is not None:
+            await self._ingestion_session.update_sliding_subscriptions(
+                sliding_sync_room_subscriptions(self.rooms, self.config.matrix_sync.sliding_timeline_limit),
+            )
 
     def _register_call_manager_callbacks(self, client: nio.AsyncClient) -> None:
         """Build the optional call manager and wire its Matrix callbacks."""
@@ -1752,6 +1756,8 @@ class AgentBot:
             new_consumer_generation=uuid4(),
             config=bot_ingestion_config(
                 self.config,
+                agent_name=self.agent_name,
+                room_ids=self.rooms,
                 timeout_ms=_SYNC_TIMEOUT_MS,
                 sync_filter=_SYNC_FILTER,
             ),
