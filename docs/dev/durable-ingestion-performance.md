@@ -20,7 +20,7 @@ The benchmark result is 200 concurrent conversations with one responder account,
 | Should SQLite writes run directly on the event loop? | No useful gain in the diagnostic, and real database contention blocks the loop. Keep the existing writer. | Ledger direct-writer section; transaction-path lock probe and inline run. |
 | Do fewer delivery transactions improve startup? | Neither tested candidate establishes a repeatable startup-tail improvement. Both are withdrawn; retain the existing delivery path. | Ledger bounded delivery-transaction trial; tracked JSON `delivery_transaction_trial`. |
 
-The latest investigation changes no production code.
+The earlier writer investigation changed no production code.
 Its measurements explain costs; they do not establish a general speedup, justify weaker durability, or prove all possible failures impossible.
 Reply completion includes roughly 60 seconds of synthetic generation, so an engine or startup speedup does not translate proportionally into total response time.
 
@@ -96,3 +96,145 @@ Use the addendum README for reproduction commands; the original source-verificat
 
 The addendum contains 120 files (1,034,820 compressed bytes), SHA-256 `93974903f48928b9cafd855af9be18071910c56f6ff79a2a40afa4d533031ae4`.
 Its manifest verifies successfully, and standalone timestamp re-analysis exactly reproduces all six timing metrics for every run.
+
+
+## Sliding restoration: matched 200-reply controls
+
+Producer `f7e1dfd78812c8c58d846bc8e62df698903c18bf` and consumer
+`d820bc3a40b6661ff709b3db09c253f29defea1e` pass the same 200-reply capacity
+profile in both transports on Tuwunel and Synapse. Each run uses the locked
+Python 3.13 consumer environment and the exact rebuilt producer wheel. The
+runner verifies clean source, installed/loaded package hashes, helper hashes and
+immutable Docker image IDs before and after the run. Controls run sequentially
+without competing test processes. Synapse retains the earlier 5000-event cap.
+
+All four pass exact 200-root/200-reply delivery, three-principal fences and source
+advancement, the 180-second measured deadline, at least 45 seconds full overlap,
+two-second health timeout, zero producer/application/outbox debt and clean stop.
+The workload uses one responder account and roughly 60 seconds of synthetic
+model generation. It does not measure 200 independent agents or qualify 1,000
+concurrent replies.
+
+| Server | Transport | Initial median / p95 (s) | Completion median / p95 (s) | Initial spread (s) | Full overlap (s) |
+| --- | --- | --- | --- | --- | --- |
+| Tuwunel | Classic | 5.862 / 11.928 | 69.898 / 76.008 | 11.669 | 50.538 |
+| Tuwunel | Sliding | 6.172 / 11.974 | 70.088 / 76.017 | 11.817 | 50.134 |
+| Synapse | Classic | 5.845 / 11.072 | 75.343 / 79.175 | 12.413 | 55.759 |
+| Synapse | Sliding | 5.556 / 10.915 | 74.808 / 78.859 | 12.006 | 56.155 |
+
+These single-run comparisons show no clear reply-speed advantage for Sliding.
+Small differences change direction between servers; they establish neither a
+repeatable speedup nor statistical equivalence. Keep Sliding for room discovery,
+explicit subscriptions and bounded windows, with similar observed performance.
+Classic remains the default. No serializer, SQLite durability, worker count or
+preparation limit changed for this restoration.
+
+The corresponding directories under `durable-sync-kernel/sliding-restoration`
+are `tuwunel-classic-capacity-20260906T183405Z`,
+`tuwunel-sliding-capacity-20260906T182731Z`,
+`synapse5000-classic-capacity-20260906T183647Z`, and
+`synapse5000-sliding-capacity-20260906T183045Z`.
+Both Sliding runs also pass the real-server probe: 20 downtime messages and a
+20-message limited live window recovered exactly, no loss or duplicates, ten
+actual history pages and no stored debt. Actual encrypted late-key and
+process-kill behavior have separate producer regression tests.
+
+Live qualification found a real backward-expanded-window bug: old membership
+context could rewind the joined tenure and demote a fresh request to history.
+The producer fix uses the existing bounded checkpoint, retains the proven
+recovery floor and keeps older context out of future recovery. It adds 58 net
+production lines; the architectural policy and tests live in the producer's
+`docs/design/sliding-sync-restoration.md`. Historical ciphertext remains observed
+history; only actionable ciphertext is automatically eligible for promotion when
+resent with a key. There is no new replay queue, store, owner or walker.
+
+The complete restoration adds 1,526 net Nio production lines, including the
+25-line released-store adoption guard. Against main `5b6de3bc`, the complete Nio
+PR is +5,056/-6,437, or 1,381 fewer production lines. Counts include comments and
+blank lines, and exclude tests, scripts and documentation. The final producer
+suite passes 844 tests with three skips, mypy is clean across 60 source files,
+and repository hooks pass. The rebuilt consumer wheel passes 205 affected tests
+and all consumer hooks.
+
+Earlier failures remain in the tracked JSON and retained evidence:
+
+- `tuwunel-sliding-capacity-20260906T174737Z` failed its two-second health read
+  timeout during the workload. It completed zero replies before abort and left
+  331 application rows pending. Its cause was not established; passing later
+  runs do not explain that failure.
+- `tuwunel-classic-capacity-20260906T175135Z` timed out before the workload: the
+  harness sent its warm-up before the responder's committed room baseline. The
+  harness now waits for that baseline before warm-up (`4ef0f6734`), outside the
+  measured deadline. The workload criteria are unchanged.
+- `tuwunel-sliding-capacity-20260906T180630Z` exposed the actual expanded-window
+  bug even after the harness correction. `20260906T181030Z` is its deliberately
+  short startup diagnostic, not a capacity test. Both sent zero workload roots.
+- `tuwunel-sliding-capacity-20260906T175756Z` completed all 200 while sampled,
+  but its profiler wrapper failed to confirm clean shutdown, so it is not a
+  qualified control. PySpy observed 3,929 main-thread wall samples at 25 Hz;
+  612 were in SQLite commit, including 335 during acknowledgement. These cover
+  setup and workload, are not CPU time or an additive phase budget, and do not
+  explain the earlier unprofiled health timeout.
+
+The pre-fix passing Synapse Sliding run and corrected Classic Tuwunel run are
+also retained, with their original source revisions. They are not substituted
+for the final matched controls above.
+
+### Application restart qualification
+
+The final Sliding restart profile passes on both servers with producer `f7e1dfd`
+and consumer `9883dba3a`: Tuwunel `20260906T184907Z` and Synapse
+`20260906T184922Z`, under the same `sliding-restoration` directory with server,
+transport and `restart-regression` prefixes. It exercises actual bot replacement,
+a fresh pending request interrupted during model execution, hard process restart,
+recovered output, historical text/media remaining non-actionable, on-demand
+history hydration, and empty retained producer/application/outbox work at clean
+shutdown. Both pass with zero historical outputs and zero drain failures.
+
+Two stale harness assumptions were fixed without changing production source:
+
+1. The original room/model configuration update now applies in place. Both
+   `20260906T183941Z` (Tuwunel) and `20260906T184117Z` (Synapse) timed out waiting
+   for replacements that the planner correctly did not request. Commit
+   `04bc7105d` changes a construction prompt to request both replacements while
+   preserving transport, model latch routing and every lifecycle assertion.
+   The written-config-to-real-planner test failed first in both sync modes.
+2. The next Tuwunel run (`20260906T184417Z`) reached fresh admission, pending
+   journal state and blocked model execution, then waited for the retired
+   Classic checkpoint file. Commit `9883dba3a` checks exact event projection,
+   then the matching SQLite producer's committed cursor and empty input/batch
+   tables in one read. Producer input is replaced atomically by a completion
+   batch, so this proves acknowledgement without an intermediate false-ready
+   state. It does not require an idle server to change an opaque position.
+   Real producer fixtures cover both kinds of pending work and an unrelated
+   empty account. All 130 harness tests and applicable hooks pass.
+
+These corrections affect only the restart harness and its tests. The four
+matched capacity controls retain their original committed source and harness
+hashes; no new production or capacity-path change followed those measurements.
+
+### Reproduce the Sliding comparison
+
+The addendum archive is `reproducibility/20260906-sliding-restoration.tar.gz` in the persistent capacity evidence
+workspace, with an extracted sibling directory and `.tar.gz.sha256` companion.
+It contains 94 manifested files (3,916,060 compressed bytes), SHA-256
+`cb8b04d1404a319346da0cb8b279980bf59c975a7d8fc8e987afafc2933f4618`. It freezes the driver hierarchy, all 16 run/source/result
+manifests, historical harness variants, final source and lock snapshots,
+verification logs, metadata diagnostics and payload-free timestamp cohorts.
+Application logs, databases, credentials and message bodies are excluded.
+
+All manifest checks pass. Standalone timestamp re-analysis reproduces all seven
+complete 200-reply cohorts exactly, including the explicitly unqualified sampled
+run. From the extracted directory:
+
+```sh
+sha256sum -c MANIFEST.sha256
+uv run --no-project --python 3.13 python capacity/durable-sync-kernel/sliding-restoration/reanalyze.py
+```
+
+The archive README gives the fresh-run commands, required committed checkouts,
+locked environment, location configuration and immutable image checks. Run
+`run_qualification.py` with `--profile capacity --sync-mode classic` or
+`--sync-mode sliding`, selecting `--server tuwunel` or `--server synapse5000`.
+Use `--gap-probe` for Sliding history probes and `--profile restart-regression`
+for application restart checks. Keep runtime source frozen during each run.

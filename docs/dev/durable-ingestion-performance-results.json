@@ -358,6 +358,691 @@
     "roots": 200,
     "synchronous": "FULL"
   },
+  "sliding_restoration": {
+    "archive": {
+      "bytes": 3916060,
+      "manifest_files": 94,
+      "path": "reproducibility/20260906-sliding-restoration.tar.gz",
+      "sha256": "cb8b04d1404a319346da0cb8b279980bf59c975a7d8fc8e987afafc2933f4618"
+    },
+    "capacity_predicates": {
+      "clean_shutdown": true,
+      "exact_delivery": true,
+      "fence_and_source_progress": true,
+      "health_read_timeout_seconds": 2,
+      "measured_deadline_seconds": 180,
+      "minimum_full_overlap_seconds": 45,
+      "responders": 1,
+      "roots": 200,
+      "syncing_principals": 3,
+      "synthetic_generation_seconds": 60,
+      "zero_producer_application_outbox_debt": true
+    },
+    "date": "2026-09-06",
+    "decision": "Retain Sliding for subscription/window features; no demonstrated reply-speed advantage over Classic in these single-run matched controls.",
+    "limits": [
+      "One matched capacity run per transport/server does not establish statistical equivalence or a general speedup.",
+      "The original pre-fix health timeout was not reproduced or explained.",
+      "The sampled run failed clean shutdown qualification.",
+      "No 1000-reply or 200-independent-agent qualification."
+    ],
+    "production_lines": {
+      "expanded_window_fix_net": 58,
+      "main_base": "5b6de3bc6f4aa0c317185953f77c9c8fe3d806a3",
+      "pr_added": 5056,
+      "pr_net": -1381,
+      "pr_removed": 6437,
+      "restoration_added": 1587,
+      "restoration_net": 1526,
+      "restoration_removed": 61,
+      "scope": "Nio src/**/*.py, including blank lines/comments; excluding scripts/tests/docs"
+    },
+    "runs": [
+      {
+        "acceptance_passed": true,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 200,
+        "diagnostic": null,
+        "error_type": null,
+        "evidence_directory": "synapse5000-classic-capacity-20260906T183647Z",
+        "metrics": {
+          "completed_reply_median_seconds": 75.343,
+          "completed_reply_p95_seconds": 79.17545,
+          "full_overlap_seconds": 55.759,
+          "initial_reply_median_seconds": 5.8445,
+          "initial_reply_p95_seconds": 11.071999999999997,
+          "initial_reply_spread_seconds": 12.413,
+          "last_completion_from_first_input_seconds": 81.077
+        },
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "6ce25fca9fb4c00c0e1b2111bdcd4a876bbba060caff278c049c8831d3b385bb",
+        "revisions": {
+          "mindroom": "d820bc3a40b6661ff709b3db09c253f29defea1e",
+          "nio": "f7e1dfd78812c8c58d846bc8e62df698903c18bf"
+        },
+        "runtime_source_matches": true,
+        "server": "synapse5000",
+        "source_unchanged": true,
+        "sync_mode": "classic",
+        "workload_roots": 200
+      },
+      {
+        "acceptance_passed": true,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 200,
+        "diagnostic": null,
+        "error_type": null,
+        "evidence_directory": "synapse5000-sliding-capacity-20260906T175450Z",
+        "gap_probe": {
+          "batch_debt": 0,
+          "input_debt": 0,
+          "live_limited_window": {
+            "actionable": 20,
+            "batches": 6,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 19,
+            "unexpected": []
+          },
+          "ok": true,
+          "requests": {
+            "history_pages": 10,
+            "initial_polls": 1,
+            "sliding_polls": 2
+          },
+          "restart": {
+            "actionable": 20,
+            "batches": 10,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 20,
+            "unexpected": []
+          }
+        },
+        "metrics": {
+          "completed_reply_median_seconds": 74.857,
+          "completed_reply_p95_seconds": 80.20135,
+          "full_overlap_seconds": 54.358,
+          "initial_reply_median_seconds": 5.8245000000000005,
+          "initial_reply_p95_seconds": 11.950149999999999,
+          "initial_reply_spread_seconds": 12.717,
+          "last_completion_from_first_input_seconds": 81.877
+        },
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "e886f8293762e038af91caa96bb36e7a461a1437e9f19cb0488e79e3c47482ca",
+        "revisions": {
+          "mindroom": "e8e668b93a601d7c6f5fb8b01d4a6329cb6633e5",
+          "nio": "2a7a134943cb6b2940f397a8e88943bf6d688259"
+        },
+        "runtime_source_matches": true,
+        "server": "synapse5000",
+        "source_unchanged": true,
+        "sync_mode": "sliding",
+        "workload_roots": 200
+      },
+      {
+        "acceptance_passed": true,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 200,
+        "diagnostic": null,
+        "error_type": null,
+        "evidence_directory": "synapse5000-sliding-capacity-20260906T183045Z",
+        "gap_probe": {
+          "batch_debt": 0,
+          "input_debt": 0,
+          "live_limited_window": {
+            "actionable": 20,
+            "batches": 6,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 19,
+            "unexpected": []
+          },
+          "ok": true,
+          "requests": {
+            "history_pages": 10,
+            "initial_polls": 1,
+            "sliding_polls": 2
+          },
+          "restart": {
+            "actionable": 20,
+            "batches": 10,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 20,
+            "unexpected": []
+          }
+        },
+        "metrics": {
+          "completed_reply_median_seconds": 74.80799999999999,
+          "completed_reply_p95_seconds": 78.85865,
+          "full_overlap_seconds": 56.155,
+          "initial_reply_median_seconds": 5.5555,
+          "initial_reply_p95_seconds": 10.91505,
+          "initial_reply_spread_seconds": 12.006,
+          "last_completion_from_first_input_seconds": 80.505
+        },
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "d047dbfd74d44ea8b4f91b94ce69fc77c457e6e5f46926a44320dcb77416789e",
+        "revisions": {
+          "mindroom": "d820bc3a40b6661ff709b3db09c253f29defea1e",
+          "nio": "f7e1dfd78812c8c58d846bc8e62df698903c18bf"
+        },
+        "runtime_source_matches": true,
+        "server": "synapse5000",
+        "source_unchanged": true,
+        "sync_mode": "sliding",
+        "workload_roots": 200
+      },
+      {
+        "acceptance_passed": false,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 0,
+        "diagnostic": null,
+        "error_type": "TimeoutError",
+        "evidence_directory": "tuwunel-classic-capacity-20260906T175135Z",
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "3cf6f2bc18545b57faa33e66f9df4338c92a9512c8a2780297a888d1a3062aba",
+        "revisions": {
+          "mindroom": "e8e668b93a601d7c6f5fb8b01d4a6329cb6633e5",
+          "nio": "2a7a134943cb6b2940f397a8e88943bf6d688259"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "classic",
+        "workload_roots": 0
+      },
+      {
+        "acceptance_passed": true,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 200,
+        "diagnostic": null,
+        "error_type": null,
+        "evidence_directory": "tuwunel-classic-capacity-20260906T180342Z",
+        "metrics": {
+          "completed_reply_median_seconds": 70.527,
+          "completed_reply_p95_seconds": 76.11475,
+          "full_overlap_seconds": 50.01,
+          "initial_reply_median_seconds": 6.125500000000001,
+          "initial_reply_p95_seconds": 12.198049999999999,
+          "initial_reply_spread_seconds": 12.088,
+          "last_completion_from_first_input_seconds": 76.874
+        },
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "f66c68e5b2e5bba74eb87ae72a62c614388021fb865f537aeee776d5edcf2ddb",
+        "revisions": {
+          "mindroom": "4ef0f67342c5c91013a033b9b0c14295361a65a1",
+          "nio": "2a7a134943cb6b2940f397a8e88943bf6d688259"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "classic",
+        "workload_roots": 200
+      },
+      {
+        "acceptance_passed": true,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 200,
+        "diagnostic": null,
+        "error_type": null,
+        "evidence_directory": "tuwunel-classic-capacity-20260906T183405Z",
+        "metrics": {
+          "completed_reply_median_seconds": 69.898,
+          "completed_reply_p95_seconds": 76.00829999999999,
+          "full_overlap_seconds": 50.538,
+          "initial_reply_median_seconds": 5.862,
+          "initial_reply_p95_seconds": 11.928400000000002,
+          "initial_reply_spread_seconds": 11.669,
+          "last_completion_from_first_input_seconds": 76.451
+        },
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "fa1ba110aaeeb7c48bcd6e7fad3ca952f6e6fcefd94883518d00b27b15614dd2",
+        "revisions": {
+          "mindroom": "d820bc3a40b6661ff709b3db09c253f29defea1e",
+          "nio": "f7e1dfd78812c8c58d846bc8e62df698903c18bf"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "classic",
+        "workload_roots": 200
+      },
+      {
+        "acceptance_passed": false,
+        "application_pending_after_cleanup": 331,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 0,
+        "diagnostic": null,
+        "error_type": "ReadTimeout",
+        "evidence_directory": "tuwunel-sliding-capacity-20260906T174737Z",
+        "gap_probe": {
+          "batch_debt": 0,
+          "input_debt": 0,
+          "live_limited_window": {
+            "actionable": 20,
+            "batches": 8,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 19,
+            "unexpected": []
+          },
+          "ok": true,
+          "requests": {
+            "history_pages": 10,
+            "initial_polls": 1,
+            "sliding_polls": 2
+          },
+          "restart": {
+            "actionable": 20,
+            "batches": 8,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 20,
+            "unexpected": []
+          }
+        },
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "bc62fa240a076ea8885105ce8f5f8b63f7a18be7b39612cbc47efcb01bba16dd",
+        "revisions": {
+          "mindroom": "e8e668b93a601d7c6f5fb8b01d4a6329cb6633e5",
+          "nio": "2a7a134943cb6b2940f397a8e88943bf6d688259"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "sliding",
+        "workload_roots": 200
+      },
+      {
+        "acceptance_passed": false,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          false
+        ],
+        "completed_replies": 200,
+        "diagnostic": {
+          "idle_threads": true,
+          "profiler": "py-spy",
+          "rate_hz": 25,
+          "stall_threshold_seconds": 0.5,
+          "wrapper_sha256": "cdf16dbf0b54e36a9887e0db0e0a48b5916df1427eda617562d8549d53633e19"
+        },
+        "error_type": "AssertionError",
+        "evidence_directory": "tuwunel-sliding-capacity-20260906T175756Z",
+        "gap_probe": {
+          "batch_debt": 0,
+          "input_debt": 0,
+          "live_limited_window": {
+            "actionable": 20,
+            "batches": 8,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 19,
+            "unexpected": []
+          },
+          "ok": true,
+          "requests": {
+            "history_pages": 10,
+            "initial_polls": 1,
+            "sliding_polls": 2
+          },
+          "restart": {
+            "actionable": 20,
+            "batches": 8,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 20,
+            "unexpected": []
+          }
+        },
+        "metrics": {
+          "completed_reply_median_seconds": 71.34049999999999,
+          "completed_reply_p95_seconds": 77.56815,
+          "full_overlap_seconds": 49.781,
+          "initial_reply_median_seconds": 6.2825,
+          "initial_reply_p95_seconds": 12.81545,
+          "initial_reply_spread_seconds": 12.736,
+          "last_completion_from_first_input_seconds": 77.759
+        },
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "2d9f8c23816b24a5618b6f096b183ef662d0bcefcdeba415f11b64ecbf358135",
+        "revisions": {
+          "mindroom": "e8e668b93a601d7c6f5fb8b01d4a6329cb6633e5",
+          "nio": "2a7a134943cb6b2940f397a8e88943bf6d688259"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "sliding",
+        "workload_roots": 200
+      },
+      {
+        "acceptance_passed": false,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 0,
+        "diagnostic": null,
+        "error_type": "TimeoutError",
+        "evidence_directory": "tuwunel-sliding-capacity-20260906T180630Z",
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "aa001c2dde3cacd1f6de6f3bcf09346dcc96442f23b367978acbc499f4dd93f0",
+        "revisions": {
+          "mindroom": "4ef0f67342c5c91013a033b9b0c14295361a65a1",
+          "nio": "2a7a134943cb6b2940f397a8e88943bf6d688259"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "sliding",
+        "workload_roots": 0
+      },
+      {
+        "acceptance_passed": false,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 0,
+        "diagnostic": {
+          "child_sha256": "24c31d42e5ea3f25f8d544e27aa0d517281b4b771d1064b6cc1d77595d5efd86",
+          "purpose": "startup classification",
+          "warmup_observation_seconds": 15,
+          "wrapper_sha256": "869efb43262d3346ca7ece0b8b1f1c0001f9609d3679806fb297d1c588c11458"
+        },
+        "error_type": "TimeoutError",
+        "evidence_directory": "tuwunel-sliding-capacity-20260906T181030Z",
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "e4517bcd5e5ae6cbf32d0209b40c326206f9866d8134702025c7dd3a6b056d5b",
+        "revisions": {
+          "mindroom": "4ef0f67342c5c91013a033b9b0c14295361a65a1",
+          "nio": "2a7a134943cb6b2940f397a8e88943bf6d688259"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "sliding",
+        "workload_roots": 0
+      },
+      {
+        "acceptance_passed": true,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "completed_replies": 200,
+        "diagnostic": null,
+        "error_type": null,
+        "evidence_directory": "tuwunel-sliding-capacity-20260906T182731Z",
+        "gap_probe": {
+          "batch_debt": 0,
+          "input_debt": 0,
+          "live_limited_window": {
+            "actionable": 20,
+            "batches": 8,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 19,
+            "unexpected": []
+          },
+          "ok": true,
+          "requests": {
+            "history_pages": 10,
+            "initial_polls": 1,
+            "sliding_polls": 2
+          },
+          "restart": {
+            "actionable": 20,
+            "batches": 8,
+            "completed_syncs": 1,
+            "duplicates": 0,
+            "expected": 20,
+            "losses": 0,
+            "missing": [],
+            "observed": 20,
+            "recovered": 20,
+            "unexpected": []
+          }
+        },
+        "metrics": {
+          "completed_reply_median_seconds": 70.0875,
+          "completed_reply_p95_seconds": 76.0166,
+          "full_overlap_seconds": 50.134,
+          "initial_reply_median_seconds": 6.172499999999999,
+          "initial_reply_p95_seconds": 11.97405,
+          "initial_reply_spread_seconds": 11.817,
+          "last_completion_from_first_input_seconds": 76.581
+        },
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "capacity",
+        "result_sha256": "b0bd3d85931dc56213f6ec95e052198576e7658f6c9695b545f017f7e82f080d",
+        "revisions": {
+          "mindroom": "d820bc3a40b6661ff709b3db09c253f29defea1e",
+          "nio": "f7e1dfd78812c8c58d846bc8e62df698903c18bf"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "sliding",
+        "workload_roots": 200
+      },
+      {
+        "acceptance_passed": false,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "diagnostic": null,
+        "error_type": "AssertionError",
+        "evidence_directory": "synapse5000-sliding-restart-regression-20260906T184117Z",
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "restart-regression",
+        "result_sha256": "973eca9b521b6fb4ce4a2bfc059010d856c547c1a81049dba06fd5881d60ef29",
+        "revisions": {
+          "mindroom": "d820bc3a40b6661ff709b3db09c253f29defea1e",
+          "nio": "f7e1dfd78812c8c58d846bc8e62df698903c18bf"
+        },
+        "runtime_source_matches": true,
+        "server": "synapse5000",
+        "source_unchanged": true,
+        "sync_mode": "sliding"
+      },
+      {
+        "acceptance_passed": true,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "diagnostic": null,
+        "error_type": null,
+        "evidence_directory": "synapse5000-sliding-restart-regression-20260906T184922Z",
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "restart-regression",
+        "result_sha256": "de2e71fdd9bc010b5e18b95c34ead5733078415d15aaf1866172f8c2dc1a1327",
+        "revisions": {
+          "mindroom": "9883dba3a5f89203d662922be83d5cd16c12ed95",
+          "nio": "f7e1dfd78812c8c58d846bc8e62df698903c18bf"
+        },
+        "runtime_source_matches": true,
+        "server": "synapse5000",
+        "source_unchanged": true,
+        "sync_mode": "sliding"
+      },
+      {
+        "acceptance_passed": false,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "diagnostic": null,
+        "error_type": "AssertionError",
+        "evidence_directory": "tuwunel-sliding-restart-regression-20260906T183941Z",
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "restart-regression",
+        "result_sha256": "ca908a2fc08fdd96ebd68ddfd8a59e33ad11b58967e4e9ce49f72eceac5db63e",
+        "revisions": {
+          "mindroom": "d820bc3a40b6661ff709b3db09c253f29defea1e",
+          "nio": "f7e1dfd78812c8c58d846bc8e62df698903c18bf"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "sliding"
+      },
+      {
+        "acceptance_passed": false,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "diagnostic": null,
+        "error_type": "AssertionError",
+        "evidence_directory": "tuwunel-sliding-restart-regression-20260906T184417Z",
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "restart-regression",
+        "result_sha256": "2cf6e640732be48d87fa7456d22941909ee28d9693bf38396155cf21ea1d7635",
+        "revisions": {
+          "mindroom": "04bc7105d68d9aa5dbc11beaea0a68f648a99dc7",
+          "nio": "f7e1dfd78812c8c58d846bc8e62df698903c18bf"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "sliding"
+      },
+      {
+        "acceptance_passed": true,
+        "application_pending_after_cleanup": 0,
+        "clean_stops": [
+          true
+        ],
+        "diagnostic": null,
+        "error_type": null,
+        "evidence_directory": "tuwunel-sliding-restart-regression-20260906T184907Z",
+        "outbox_pending_after_cleanup": 0,
+        "producer_pending_batches": 0,
+        "producer_pending_input": 0,
+        "profile": "restart-regression",
+        "result_sha256": "a87914b8e71c76e9aa317b6ee25fae559b73a363ab674ae04f72f69562ef7739",
+        "revisions": {
+          "mindroom": "9883dba3a5f89203d662922be83d5cd16c12ed95",
+          "nio": "f7e1dfd78812c8c58d846bc8e62df698903c18bf"
+        },
+        "runtime_source_matches": true,
+        "server": "tuwunel",
+        "source_unchanged": true,
+        "sync_mode": "sliding"
+      }
+    ],
+    "verification": {
+      "consumer_wheel_affected_tests_passed": 205,
+      "final_harness_tests_passed": 130,
+      "hooks_passed": true,
+      "mypy_errors": 0,
+      "mypy_files": 60,
+      "nio_passed": 844,
+      "nio_skipped": 3
+    }
+  },
   "source_revisions": {
     "mindroom": "e276982fdbd3f58b8d471376c417767654819da4",
     "nio": "ce18a1fed0a592b93b789de4480ac3e61e8c3145"
