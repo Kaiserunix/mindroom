@@ -1,0 +1,312 @@
+{
+  "capacity_runs": [
+    {
+      "acceptance_passed": true,
+      "clean_shutdown": true,
+      "driver_directory": "transaction-path/trace-200-20260906T153922Z",
+      "event_loop_stalls": 0,
+      "evidence_directory": "mindroom-live-matrix-fuzz-68e81282",
+      "label": "sql_trace",
+      "metrics": {
+        "complete_workload_flushes": 200,
+        "completed_reply_count": 200,
+        "first_input_to_last_completed_reply_seconds": 80.015,
+        "flush_start_spread_seconds": 12.328433990478516,
+        "input_to_completed_reply_median_seconds": 72.74549999999999,
+        "input_to_completed_reply_p95_seconds": 79.81224999999999,
+        "pending_journal_rows_after_cleanup": 0,
+        "post_terminal_reaction_distinct_events": 1,
+        "post_terminal_reaction_principals": 3,
+        "post_terminal_reaction_settled_rows": 3,
+        "root_count": 200,
+        "root_release_span_seconds": 0.154,
+        "unacknowledged_outbox_rows_after_cleanup": 0,
+        "visible_full_overlap_seconds": 49.427,
+        "visible_initial_spread_seconds": 14.056
+      },
+      "producer_debt_before_cleanup": 0,
+      "result_sha256": "9bb4c9336b20f75562073af31c62c9ac8ae6e9889178aade2d0bc0589e1a6d84",
+      "runtime_source_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "acceptance_passed": true,
+      "clean_shutdown": true,
+      "driver_directory": "transaction-path/trace-200-20260906T154420Z",
+      "event_loop_stalls": 0,
+      "evidence_directory": "mindroom-live-matrix-fuzz-bc2989a3",
+      "label": "all_waits_trace",
+      "metrics": {
+        "complete_workload_flushes": 200,
+        "completed_reply_count": 200,
+        "first_input_to_last_completed_reply_seconds": 79.677,
+        "flush_start_spread_seconds": 12.576787948608398,
+        "input_to_completed_reply_median_seconds": 72.36850000000001,
+        "input_to_completed_reply_p95_seconds": 79.0095,
+        "pending_journal_rows_after_cleanup": 0,
+        "post_terminal_reaction_distinct_events": 1,
+        "post_terminal_reaction_principals": 3,
+        "post_terminal_reaction_settled_rows": 3,
+        "root_count": 200,
+        "root_release_span_seconds": 0.171,
+        "unacknowledged_outbox_rows_after_cleanup": 0,
+        "visible_full_overlap_seconds": 49.518,
+        "visible_initial_spread_seconds": 13.726
+      },
+      "producer_debt_before_cleanup": 0,
+      "result_sha256": "0fe1beba6f84eb46092cf2be1c736b94285b6ab7715fe83de846ed24a915e978",
+      "runtime_source_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "acceptance_passed": true,
+      "clean_shutdown": true,
+      "driver_directory": "startup-waits/control-200-20260906T154923Z",
+      "event_loop_stalls": 0,
+      "evidence_directory": "mindroom-live-matrix-fuzz-71dab4e7",
+      "label": "normal_control",
+      "metrics": {
+        "complete_workload_flushes": 200,
+        "completed_reply_count": 200,
+        "first_input_to_last_completed_reply_seconds": 76.334,
+        "flush_start_spread_seconds": 10.800461053848267,
+        "input_to_completed_reply_median_seconds": 69.7295,
+        "input_to_completed_reply_p95_seconds": 75.56095,
+        "pending_journal_rows_after_cleanup": 0,
+        "post_terminal_reaction_distinct_events": 1,
+        "post_terminal_reaction_principals": 3,
+        "post_terminal_reaction_settled_rows": 3,
+        "root_count": 200,
+        "root_release_span_seconds": 0.2,
+        "unacknowledged_outbox_rows_after_cleanup": 0,
+        "visible_full_overlap_seconds": 49.873,
+        "visible_initial_spread_seconds": 11.983
+      },
+      "producer_debt_before_cleanup": 0,
+      "result_sha256": "ad5b7d4607a2282884baabde319ee30aa32ad2af250f1f73561b14808a7849a4",
+      "runtime_source_matches": true,
+      "source_unchanged": true
+    },
+    {
+      "acceptance_passed": true,
+      "clean_shutdown": true,
+      "driver_directory": "transaction-path/inline-200-20260906T155552Z",
+      "event_loop_stalls": 0,
+      "evidence_directory": "mindroom-live-matrix-fuzz-ecc9c42a",
+      "label": "inline_diagnostic",
+      "metrics": {
+        "complete_workload_flushes": 200,
+        "completed_reply_count": 200,
+        "first_input_to_last_completed_reply_seconds": 77.636,
+        "flush_start_spread_seconds": 10.567098140716553,
+        "input_to_completed_reply_median_seconds": 71.04249999999999,
+        "input_to_completed_reply_p95_seconds": 76.8475,
+        "pending_journal_rows_after_cleanup": 0,
+        "post_terminal_reaction_distinct_events": 1,
+        "post_terminal_reaction_principals": 3,
+        "post_terminal_reaction_settled_rows": 3,
+        "root_count": 200,
+        "root_release_span_seconds": 0.23,
+        "unacknowledged_outbox_rows_after_cleanup": 0,
+        "visible_full_overlap_seconds": 50.813,
+        "visible_initial_spread_seconds": 11.768
+      },
+      "producer_debt_before_cleanup": 0,
+      "result_sha256": "63c8f35c79e08e55b36bb2845e4cfc6288be720788b4b58bf45ed14dcd44a640",
+      "runtime_source_matches": true,
+      "source_unchanged": true
+    }
+  ],
+  "date": "2026-09-06",
+  "limitations": [
+    "Traced timing includes observer overhead.",
+    "Native waits overlap thread CPU and cover a wider timer bracket.",
+    "GIL acquisition waits include scheduler and mutex reacquisition costs.",
+    "Isolated replay omits application computation and concurrent readers; it is not an achievable application speedup.",
+    "Direct replay validates full run; threaded replay validates the matching startup prefix.",
+    "Inline changes both handoffs and event-loop scheduling; it is not a pure GIL experiment.",
+    "One responder account with 200 conversations does not qualify 200 agents or 1000 concurrent replies."
+  ],
+  "lock_contention": [
+    {
+      "heartbeat_delay_seconds": 0.00011487819254398304,
+      "heartbeat_seconds": 0.020114878192543983,
+      "mode": "worker",
+      "synchronous": "FULL",
+      "write_committed": true,
+      "write_seconds": 2.2321416940540075
+    },
+    {
+      "heartbeat_delay_seconds": 2.211728292070329,
+      "heartbeat_seconds": 2.231728292070329,
+      "mode": "inline",
+      "synchronous": "FULL",
+      "write_committed": true,
+      "write_seconds": 2.2317395131103694
+    }
+  ],
+  "production_lines_changed_in_this_investigation": 0,
+  "reproduction_archive": {
+    "bytes": 32729033,
+    "contents_note": "The archived copy of this measurement summary predates addition of this archive checksum.",
+    "files_checked_by_manifest": 583,
+    "path_relative_to_capacity_workspace": "reproducibility/20260906-writer-investigation.tar.gz",
+    "sha256": "358390b12416dd60d0944e3e6181f6dfcd7abaac07848a9ac310b4c223b15fb7",
+    "storage": "Retained in the persistent capacity workspace; not committed to Git."
+  },
+  "retained_policy": {
+    "health_read_timeout_seconds": 2,
+    "minimum_full_overlap_seconds": 45,
+    "preparation_slots": 8,
+    "reply_timeout_seconds": 180,
+    "roots": 200,
+    "synchronous": "FULL"
+  },
+  "source_revisions": {
+    "mindroom": "e276982fdbd3f58b8d471376c417767654819da4",
+    "nio": "ce18a1fed0a592b93b789de4480ac3e61e8c3145"
+  },
+  "writer_analysis": [
+    {
+      "analysis_file": "transaction-path/analysis200-repeat.log",
+      "cohort": "complete writer operations starting inside startup window",
+      "replay": [
+        {
+          "all_transactions": 10604,
+          "final_database_matches": true,
+          "mode": "direct",
+          "scope": "full_run",
+          "seconds_all_transactions": 10.662957564927638,
+          "startup": {
+            "execute_BEGIN": 0.008349466137588024,
+            "execute_COMMIT": 1.2032139650546014,
+            "execute_DELETE": 0.014046316035091877,
+            "execute_INSERT": 0.054263461381196976,
+            "execute_SELECT": 0.047697451896965504,
+            "execute_UPDATE": 0.02395536983385682,
+            "fetch_INSERT": 0.01378212682902813,
+            "fetch_SELECT": 0.012049280572682619,
+            "fetch_UPDATE": 0.0047652944922447205,
+            "transactions": 1722,
+            "worker_cpu": 0.2750133949998599,
+            "worker_wall": 1.4094072305597365
+          },
+          "verified_fetches": 80451
+        },
+        {
+          "all_transactions": 2022,
+          "final_database_matches": true,
+          "mode": "threaded",
+          "scope": "prefix_through_startup",
+          "seconds_all_transactions": 1.9244440221227705,
+          "startup": {
+            "execute_BEGIN": 0.010128352791070938,
+            "execute_COMMIT": 1.1434510769322515,
+            "execute_DELETE": 0.01426410349085927,
+            "execute_INSERT": 0.051819181535393,
+            "execute_SELECT": 0.046302678529173136,
+            "execute_UPDATE": 0.02334447856992483,
+            "fetch_INSERT": 0.013967315666377544,
+            "fetch_SELECT": 0.012527113314718008,
+            "fetch_UPDATE": 0.004863188602030277,
+            "transactions": 1722,
+            "with_handoff": 1.4586657821200788,
+            "worker_cpu": 0.27242263899999974,
+            "worker_wall": 1.3484535105526447
+          },
+          "verified_fetches": 20734
+        }
+      ],
+      "window_seconds": 14.960000038146973,
+      "worker_count": 1722,
+      "worker_cpu": 1.6855720429999999,
+      "worker_wall": 11.439153403043747,
+      "writer_phases": {
+        "copied_result_to_writer_report": 1.4798282980918884,
+        "done_observation_to_transfer_request": 0.007426481228321791,
+        "submission": 0.5680004088208079,
+        "transfer_callback": 0.017873108386993408,
+        "transfer_request_to_callback": 1.4370489194989204,
+        "worker": 11.439153403043747,
+        "worker_to_done_observation": 0.01742737926542759
+      }
+    },
+    {
+      "analysis_file": "transaction-path/analysis200-all-waits.log",
+      "cohort": "complete writer operations starting inside startup window",
+      "native_aggregate_scope": "Outer writer-operation wrapper, including diagnostic bookkeeping; four intercepted APIs, not all possible off-CPU time",
+      "native_all_wait_calls": {
+        "cond_timedwait": 98212,
+        "cond_wait": 0,
+        "fdatasync": 0,
+        "fsync": 1379
+      },
+      "native_all_wait_seconds": {
+        "cond_timedwait": 7.693464986048639,
+        "cond_wait": 0.0,
+        "fdatasync": 0.0,
+        "fsync": 2.2984112869016826
+      },
+      "replay": [
+        {
+          "all_transactions": 10508,
+          "final_database_matches": true,
+          "mode": "direct",
+          "scope": "full_run",
+          "seconds_all_transactions": 10.508924630004913,
+          "startup": {
+            "execute_BEGIN": 0.008077582344412804,
+            "execute_COMMIT": 1.136178744956851,
+            "execute_DELETE": 0.013852603267878294,
+            "execute_INSERT": 0.0535705741494894,
+            "execute_SELECT": 0.046765836887061596,
+            "execute_UPDATE": 0.024176969658583403,
+            "fetch_INSERT": 0.013827387243509293,
+            "fetch_SELECT": 0.011925118509680033,
+            "fetch_UPDATE": 0.004824514035135508,
+            "transactions": 1719,
+            "worker_cpu": 0.2706526270000893,
+            "worker_wall": 1.340203597676009
+          },
+          "verified_fetches": 80407
+        },
+        {
+          "all_transactions": 2023,
+          "final_database_matches": true,
+          "mode": "threaded",
+          "scope": "prefix_through_startup",
+          "seconds_all_transactions": 1.9625064926221967,
+          "startup": {
+            "execute_BEGIN": 0.009704621974378824,
+            "execute_COMMIT": 1.2105027218349278,
+            "execute_DELETE": 0.013929965905845165,
+            "execute_INSERT": 0.05151708284392953,
+            "execute_SELECT": 0.04585740389302373,
+            "execute_UPDATE": 0.023158501833677292,
+            "fetch_INSERT": 0.014129042625427246,
+            "fetch_SELECT": 0.012424760963767767,
+            "fetch_UPDATE": 0.004889890551567078,
+            "transactions": 1719,
+            "with_handoff": 1.519889404065907,
+            "worker_cpu": 0.27351146500000106,
+            "worker_wall": 1.4135946668684483
+          },
+          "verified_fetches": 20859
+        }
+      ],
+      "window_seconds": 14.583999872207642,
+      "worker_count": 1719,
+      "worker_cpu": 1.2722474989999994,
+      "worker_wall": 11.130235767457634,
+      "writer_phases": {
+        "copied_result_to_writer_report": 1.5522136013023555,
+        "done_observation_to_transfer_request": 0.007213416043668985,
+        "submission": 0.5532806236296892,
+        "transfer_callback": 0.017219177447259426,
+        "transfer_request_to_callback": 1.4108457854017615,
+        "worker": 11.130235767457634,
+        "worker_to_done_observation": 0.01843590848147869
+      }
+    }
+  ]
+}

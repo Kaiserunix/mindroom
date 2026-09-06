@@ -256,3 +256,99 @@ Across those categories, 0.491 seconds is worker submission, 10.242 seconds work
 Those phase totals and the separate native synchronization samples overlap the table and must not be added to it.
 This identifies the application operations occupying the writer, but native symbols still do not resolve every low-level synchronization owner.
 Reply-completion measurements additionally include approximately 60 seconds of synthetic model generation; the table describes startup, not that generation interval.
+
+## SQL replay and native wait attribution
+
+The next investigation resolves most of the previously unidentified writer waiting to CPython GIL acquisition.
+It uses MindRoom `e276982fdbd3f58b8d471376c417767654819da4` and Nio `ce18a1fed0a592b93b789de4480ac3e61e8c3145`, without changing either production source tree.
+The [performance evidence index](durable-ingestion-performance.md) records reproduction commands, source provenance, artifact locations and earlier decisions.
+
+### Reply transaction boundaries
+
+| Transition | Existing persistence and required ordering |
+| --- | --- |
+| Prepare response | Commit pending turn context before response generation starts. |
+| Send initial placeholder | Enqueue frozen delivery, claim attempt and device, bind sending device, send to Matrix, then acknowledge. |
+| Bind visible reply | Persist the returned Matrix event ID in the pending turn context. |
+| Finish response | Enqueue FINAL intent and settle its source events atomically; claim/bind device, send the edit, then acknowledge with terminal facts and projection. |
+| Publish terminal state | Reconcile committed terminal facts with concurrent ledger mutations and controller completion. |
+
+Network effects require committed intent before sending and acknowledgment after the result.
+FINAL source settlement, acknowledgment projections, membership fences and INITIAL-before-FINAL ordering remain required.
+There are possible redundant local writes, but these must be distinguished from those crash boundaries.
+Fresh claim already persists the sending device; its following device-binding transaction is a candidate for removal only when the caller proves it owns that fresh claim.
+Live enqueue and claim could potentially share a transaction, provided an accepted FINAL still transfers source ownership when an unresolved INITIAL prevents immediate claiming.
+Recovery of an older attempt must retain its original device until reconciliation succeeds.
+The durable terminal publication rewrite is not generally redundant: the concurrent-redaction regression in `test_response_delivery_gateway.py` demonstrates why it exists.
+None of these candidates is implemented or claimed as a measured speedup here.
+
+### Same SQL, different execution environment
+
+The diagnostic captures writer SQL, parameters and fetched results in memory, starting from a SQLite backup after schema setup.
+After the application stops, it replays the same statements and commit boundaries on the same filesystem with `synchronous=FULL`.
+Full direct replay checks every fetched result and the final logical database contents; threaded replay checks the startup prefix against the direct replay's matching prefix.
+Both live/replay comparisons use exactly the same complete operation IDs that start between the first workload input and last initial visible reply.
+Operations may finish after that window; their summed phases are not a clipped wall-time partition of it.
+
+| Diagnostic | Startup operations | Live worker wall time | Direct SQL replay | Threaded SQL replay, including handoff |
+| --- | ---: | ---: | ---: | ---: |
+| First valid 200-root trace | 1,722 | 11.439 s | 1.409 s | 1.459 s |
+| Trace with all native waits counted | 1,719 | 11.130 s | 1.340 s | 1.520 s |
+
+The second direct replay verifies 80,407 fetched results across 10,508 full-run transactions and matches the final database.
+Its threaded startup prefix verifies 20,859 fetched results across 2,023 prefix transactions; the table selects the same 1,719 startup operations from each replay.
+Those operations include shared sync, admission and hydration work, not just 200 independent reply lifecycles.
+Replay omits application computation, concurrent readers and most tracing overhead, and changes cache/checkpoint and competing I/O conditions.
+The ratio is evidence of runtime contention; it is not an eightfold achievable application speedup.
+
+### What occupies the live writer
+
+In the second trace, the selected worker operations use 1.272 seconds of thread CPU during 11.130 seconds of worker wall time.
+Native counters record 98,212 timed condition waits totaling 7.693 seconds, all on one condition object whose sampled native stacks identify CPython `take_gil`.
+This includes wakeup scheduling and mutex reacquisition, not exclusively time another thread holds the GIL.
+They also record 1,379 `fsync` calls totaling 2.298 seconds.
+Counters cover every selected operation, including waits shorter than the 500-microsecond stack-capture threshold, with no buffer overflow or unattributed condition-object time.
+The native wrapper covers slightly more bookkeeping than the worker timer, and timed calls include some CPU/kernel time; these values and thread CPU must not be summed as an exact disjoint decomposition.
+The probe intercepts four wait/sync APIs, not every possible blocking operation or scheduler delay.
+
+The database worker repeatedly relinquishes and reacquires Python execution while stepping and fetching SQLite results.
+[CPython's SQLite implementation](https://github.com/python/cpython/blob/3.13/Modules/_sqlite/cursor.c) releases the GIL at multiple execution and row-conversion boundaries.
+The measured native stacks include statement execution and fetching; they do not prove all 98,212 waits originate at one particular source line.
+After worker completion, scheduling the result-transfer callback costs another 1.411 seconds across these operations, followed by 1.552 seconds before the writer reports the copied result.
+Submission adds 0.553 seconds; the remaining measured completion phases total about 0.043 seconds.
+
+Inclusive main-loop callback CPU includes streaming-chunk consumption (1.418 seconds), lazy response startup (0.701), Nio sync (0.669), ingestion pumping (0.485) and pending-event lanes (0.342).
+These callback names include awaited generator/provider code executed within the callback; they are leads for narrower profiling, not exclusive source-line costs.
+The main loop and SQLite readers compete with the writer for Python execution even though the host has spare cores.
+Changing the thread switch interval or pool size already failed to improve normal controls, so this finding does not revive those tuning changes.
+
+Both valid traced runs complete 200 replies, settle three fence principals, drain all producer/application/outbox debt and shut down cleanly with verified source identity.
+Their initial reply spreads are 14.056 and 13.726 seconds; a fresh normal control is 11.983 seconds with 49.873 seconds of full overlap and 69.730/75.561-second completion median/p95.
+That normal control passes every unchanged predicate.
+The tracing overhead is material and prevents treating diagnostic timings as normal production latency.
+An earlier 200-root trace had a postprocessing error that mistook three principals' copies of one physical reply for duplicate replies; it is excluded from accepted controls.
+An accidentally started duplicate diagnostic was stopped and is also excluded.
+
+### Direct event-loop writer: not adopted
+
+A final diagnostic executes the existing FULL transactions on the event loop, yielding explicitly between transactions.
+It changes neither SQL nor commit boundaries, but changes both thread handoffs and event-loop scheduling, so it cannot isolate GIL effects alone.
+
+| Execution policy | Initial reply spread | Full overlap | Completion median | Completion p95 | Capacity acceptance |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Normal worker | 11.983 s | 49.873 s | 69.730 s | 75.561 s | PASS |
+| Diagnostic event-loop writer | 11.768 s | 50.813 s | 71.042 s | 76.847 s | PASS |
+
+Both runs complete all 200 replies, settle three fence principals, leave zero debt and shut down cleanly with source verification.
+This single comparison establishes no useful startup improvement; completion latency is worse in the diagnostic.
+A separate real SQLite contention probe holds `BEGIN IMMEDIATE` on another connection for 2.2 seconds.
+Both writer policies commit successfully after about 2.232 seconds, but a callback scheduled for 20 ms runs only 0.115 ms late with the normal worker and 2.212 seconds late with the event-loop writer.
+An external thread-export writer is a supported source of such contention; the backend's busy timeout is ten seconds.
+The diagnostic therefore both lacks a demonstrated performance benefit and exposes loop blocking under realistic contention.
+Keep the existing offloaded writer, FULL durability and eight preparation slots.
+
+The investigation is complete; it ships zero production lines and no new dependency or guarantee reduction.
+The next bounded candidate is eliminating the provably fresh attempt's duplicate device-binding transaction, followed by measuring whether combining live enqueue/claim is worthwhile.
+These are candidates, not promised speedups or authorization to weaken recovery, membership or source-settlement semantics.
+A new database process, different driver, larger preparation pool or broad scheduling rewrite is not justified by these measurements alone.
+1,000 concurrent replies remain unqualified.
