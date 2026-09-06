@@ -253,3 +253,24 @@ The next useful investigation is an exact-startup trace of producer processing, 
 Verification for this documentation follow-up: 15,522 consumer tests passed, with 22 skipped and 16 warnings; all repository hooks passed.
 The producer suite passed 700 tests with three skipped, its full type check reported no issues in 58 source files, and its repository hooks passed.
 Installed producer and consumer source hashes still match the tested commits; both production deltas are zero.
+
+## Correlated profiling and ledger ownership
+
+The subsequent exact-startup trace identifies the agent-wide handled-turn ledger lock as the critical serialization point.
+At baseline, it remained held across unrelated admission and settlement work in the shared writer queue.
+Nio commit stalls overlap these waits and are not additional wall time to sum into them.
+The [ledger ownership design](ledger-write-ownership.md) records the correlated 50/100/200 traces, calibrated py-spy samples, rejected unsafe prototype, conflict rules and final controls.
+
+MindRoom `5502b1177` reserves conflicting event identities through commit or rollback while allowing unrelated turns to await their own writes concurrently.
+It retains both durable pending-turn writes, existing backend transactions, eight preparation slots and FULL durability.
+The ledger grows by 47 net lines; shorter caller documentation makes the total production-file increase 28 lines.
+Twenty new SQLite/Postgres cases cover independence, source/discovery aliases, old anchors, rollback, cancellation and cleanup.
+The full suite passes 15,542 tests with 22 skipped; all repository hooks pass.
+
+Alternating uninstrumented Tuwunel controls reduce initial reply spread from 21.69–21.81 seconds to 12.03–12.07 seconds.
+Full visible overlap rises from 39.71–40.34 seconds to 49.74–49.90 seconds, passing the unchanged 45-second target in both fixed runs.
+Completion p95 improves from about 83.3 seconds to 75.9–76.1 seconds, including approximately 60 seconds of synthetic generation.
+All runs complete 200 exact replies, settle all three fence principals and drain producer, journal and outbox work cleanly.
+Both fixed runs pass every acceptance predicate, resolving the previously recorded Tuwunel startup limitation for this workload.
+This result does not qualify 1,000 concurrent replies or justify another scheduler, writer or durability change.
+The same committed source also passes the unchanged Synapse control with 200 exact replies, 54.219 seconds of full overlap, all three fence principals and zero retained work after clean shutdown.

@@ -3,7 +3,7 @@
 ## Purpose and evidence
 
 Independent conversations must be able to prepare concurrently while every visible effect still waits for its required durable write.
-The handled-turn ledger currently holds one agent-wide lock across both in-memory publication and the awaited database operation.
+Before this change, the handled-turn ledger held one agent-wide lock across both in-memory publication and the awaited database operation.
 A correlated Tuwunel startup trace at MindRoom `738ee46bc` and Nio `fa587be` identifies that lock as the critical serialization point.
 
 | Roots | First-to-last initial reply | Startup from first input | Ledger held | Ledger waiting in writer queue | Ledger's own worker execution |
@@ -104,5 +104,38 @@ The complete suite passes 15,542 tests with 22 skipped and 15 warnings in 92.31 
 The earlier focused ledger, turn-store and journal group passes 843 tests; the four candidate-only cases were added afterward and pass separately.
 All repository hooks pass, including types, dependency boundaries, module privacy and frontend checks.
 
-The diagnostic prototype remains evidence only.
-Production capacity acceptance awaits the alternating controls below.
+## Committed-source capacity controls
+
+The actual implementation is `5502b1177`; the original-source control is `738ee46bc` in a separate checkout with the same locked dependencies.
+Nio remains at source `fa587be`, matching the installed immutable pin `a686d43`.
+The local host has 32 Neoverse-V2 ARM64 cores and about 126 GiB RAM; the application uses Python 3.13.14.
+Each uninstrumented run checks committed package hashes and loaded module paths before and after execution.
+FULL durability, eight preparations, 200 roots, a shared 180-second deadline, 45-second minimum full visible overlap and two-second health timeout remain unchanged.
+Times include approximately 60 seconds of synthetic generation and are not real-model latency predictions.
+
+| Tuwunel run | Initial reply spread | Full overlap | Completion median | Completion p95 | First input to last completion | Acceptance |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Original, before implementation | 21.811 s | 39.712 s | 72.660 s | 83.334 s | 84.571 s | Overlap below 45 s |
+| Implementation | 12.028 s | 49.901 s | 69.809 s | 76.096 s | 76.716 s | PASS |
+| Original, repeated | 21.691 s | 40.339 s | 72.975 s | 83.304 s | 84.335 s | Overlap below 45 s |
+| Implementation, repeated | 12.074 s | 49.744 s | 70.188 s | 75.945 s | 76.895 s | PASS |
+
+Both implementations complete exactly 200 replies, settle all three post-terminal fence principals, retain no producer input/batch rows, application work or outbox debt, and shut down cleanly.
+No event-loop stalls or degraded reads are reported.
+The original fails only the performance requirement; both fixed runs pass every predicate.
+The roughly 45% reduction in initial reply spread survives an alternating comparison without tracing or runtime patches.
+Completion p95 improves by about 7.3 seconds; the full-overlap gain is not obtained by delaying completion.
+
+Original process-tree CPU averages 61.9–65.6% of one core, versus 60.7–61.3% with the fix; peak rises from about 104% to 120% as work overlaps.
+Peak process-tree RSS is 622–634 MiB originally and 625–640 MiB with the fix.
+These few local controls establish a worthwhile improvement for this workload, not a universal latency bound or qualification for more than 1,000 concurrent replies.
+The producer, writer, codec and durability policy remain unchanged.
+
+Retained Tuwunel evidence is in `startup-trace/control-200-20260906T123518Z`, `control-200-20260906T130454Z`, `control-200-20260906T130753Z` and `control-200-20260906T131212Z` in the capacity workspace.
+Earlier diagnostic failures and the unsafe root-partition prototype remain separately identified; neither substitutes for these actual-source controls.
+
+The same committed implementation also passes the unchanged Synapse 5,000-event-cap control.
+It completes all 200 replies with 13.156 seconds of initial reply spread, 54.219 seconds of full overlap, 75.327-second completion median and 80.001-second p95.
+All three fence principals settle; producer, journal and outbox debt is zero after clean shutdown, with no event-loop stalls or degraded reads.
+This is an additional server qualification, not an alternating Synapse performance comparison.
+Its source-verified evidence is `controls-20260906T131520Z` in the capacity workspace.
