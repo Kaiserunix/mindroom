@@ -151,6 +151,9 @@ A rejoin retains the advanced tenure, so a late acknowledgement cannot project a
 
 `matrix_sync_consumers` binds each principal's durable consumer generation to one nio stream and records its next batch sequence.
 The owned session reuses that consumer identity on restart and rejects a mismatched stream binding.
+Soft-logout renewal requests the existing Matrix device and preserves its keys, stream, producer positions, and delivery identity.
+Hard logout, missing device storage, or changed account/device identity stops startup; automatic device replacement is unsupported.
+Initial login persists its exact credentials after the local store exists and before journal binding, so interrupted startup can reopen the same device.
 A batch committed before a crash is recognized on redelivery, while its pending semantic work remains recoverable from the journal.
 Nio owns the receive cursor; MindRoom's continuity file contains only pending join/decrypt fences.
 Pre-durable membership tenures and older continuity-file formats are not adopted.

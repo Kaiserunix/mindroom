@@ -17,6 +17,10 @@ from tests.conftest import orchestrator_runtime_paths
 def _mock_running_bot(entity_name: str, agent_user: object, config: Config) -> MagicMock:
     """Return one distinct running bot double with its configured rooms."""
     bot = MagicMock()
+    bot.pending_response_owner_count = 0
+    bot.pending_response_phase_counts = {}
+    bot.deferred_stop_phase = None
+    bot.deferred_stop_required = False
     bot.agent_name = entity_name
     bot.agent_user = agent_user
     bot.config = config

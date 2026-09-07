@@ -29,3 +29,14 @@ Do not delete crypto keys to bypass that refusal.
 The cutover abandons the old journal's unfinished work and local conversation projection.
 Configuration, credentials, workspaces, memories, knowledge stores, and separate agent sessions remain in their existing stores.
 Matrix room messages remain on the homeserver, and accessible history can be fetched again when the required encryption keys are available.
+
+## Device recovery after the cutover
+
+Normal restarts reuse the existing Matrix device and durable stream.
+If the homeserver reports a soft logout, MindRoom renews credentials for that same device using the configured authentication method.
+Pending transport input, application work, encryption keys, and delivery identities remain intact.
+
+Automatic device replacement is unsupported.
+If the device store is missing, restore the deployment's matching storage backup before restarting.
+Hard logout, a deleted server device, or a changed returned identity stops startup and requires operator recovery of the bound device; clearing the journal or crypto directory is not a supported repair.
+Preserve the failed deployment's state when recovering it, because retained input and attempted deliveries may still need reconciliation.

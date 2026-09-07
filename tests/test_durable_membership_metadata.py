@@ -15,7 +15,7 @@ from nio.durable import open_durable_sync
 
 from mindroom.config.access import ResponderAccessConfig
 from mindroom.event_journal import DeliveryProjectionPendingError, EventKind
-from mindroom.event_journal import store as journal_store
+from mindroom.event_journal import journal as journal_ops
 from mindroom.matrix.durable_ingestion import consume_one_ingestion_batch
 from mindroom.matrix.state import MatrixState
 from tests.conftest import install_call_manager_mock, make_matrix_client_mock
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from mindroom.event_journal import AdmissionFacts, EventJournalStore, InboundEvent, IngestionRecordAdmission
+    from mindroom.event_journal import AdmissionFacts, EventJournalStore, IngestionRecordAdmission
     from mindroom.event_journal.backend import Transaction
 
 ROOM = "!grant:localhost"
@@ -103,17 +103,18 @@ async def test_real_member_state_and_timeline_preserve_tenure_and_hooks(  # noqa
     completed = 0
     observed: list[tuple[str, bool, str, int]] = []
     blocked_leaves = 0
-    snapshot_source = journal_store._snapshot_interactive_source
+    apply_record = journal_ops._apply_ingestion_disposition
 
-    def snapshot(transaction: Transaction, principal_id: str, event: InboundEvent) -> None:
+    def fail_after_leave(transaction: Transaction, principal_id: str, record: IngestionRecordAdmission) -> bool:
         nonlocal blocked_leaves
-        if block_leave_once and event.event_id == "$leave" and blocked_leaves == 0:
+        semantic_new = apply_record(transaction, principal_id, record)
+        if block_leave_once and record.event is not None and record.event.event_id == "$leave" and blocked_leaves == 0:
             blocked_leaves += 1
-            message = "own leave projection pending"
+            message = "own leave transaction interrupted"
             raise DeliveryProjectionPendingError(message)
-        snapshot_source(transaction, principal_id, event)
+        return semantic_new
 
-    monkeypatch.setattr(journal_store, "_snapshot_interactive_source", snapshot)
+    monkeypatch.setattr(journal_ops, "_apply_ingestion_disposition", fail_after_leave)
 
     async def complete() -> None:
         nonlocal completed

@@ -3391,7 +3391,12 @@ async def test_orchestrator_runs_two_recovery_waves_around_room_setup(tmp_path: 
     orchestrator.config = config
 
     call_order: list[str] = []
-    router_bot = MagicMock()
+    router_bot = MagicMock(
+        pending_response_owner_count=0,
+        pending_response_phase_counts={},
+        deferred_stop_phase=None,
+        deferred_stop_required=False,
+    )
     router_bot.agent_name = ROUTER_AGENT_NAME
     router_bot.try_start = AsyncMock(return_value=True)
     router_bot.stop = AsyncMock()

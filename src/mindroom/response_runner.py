@@ -710,14 +710,16 @@ class _PreparedResponseRuntime:
     tool_dispatch: ToolDispatchContext
 
 
-@dataclass(frozen=True)
+@dataclass
 class _InboxResponseOwnership:
-    """Recovery callbacks retained with one detached inbox response."""
+    """Own a response through terminal cleanup and consumption of its recovery proof."""
 
     recovery_proof_ready: Callable[[], bool | Awaitable[bool]]
     on_failure: Callable[[], None] | None
     shutdown_phase_trace: ResponseShutdownPhaseTrace
     source_event_ids: frozenset[str]
+    drain_intent: RuntimeShutdownIntent | None = None
+    proof_task: asyncio.Task[bool] | None = None
 
 
 @dataclass
@@ -733,19 +735,6 @@ class ResponseRunner:
         init=False,
     )
     _inbox_response_tasks: dict[asyncio.Task[None], _InboxResponseOwnership] = field(default_factory=dict, init=False)
-    _process_shutdown_recovery_checks: dict[
-        asyncio.Task[None],
-        Callable[[], bool | Awaitable[bool]],
-    ] = field(
-        default_factory=dict,
-        init=False,
-        repr=False,
-    )
-    _recovery_proof_tasks: dict[asyncio.Task[None], asyncio.Task[bool]] = field(
-        default_factory=dict,
-        init=False,
-        repr=False,
-    )
     _incomplete_inbox_responses_recoverable: bool = field(default=True, init=False)
     _process_shutdown_started: bool = field(default=False, init=False)
     _admission_shutdown_requested: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
@@ -809,42 +798,28 @@ class ResponseRunner:
 
     def has_live_inbox_response(self, source_event_id: str) -> bool:
         """Return whether a managed response task still owns one journal source."""
-        return any(source_event_id in ownership.source_event_ids for ownership in self._inbox_response_tasks.values())
+        return any(
+            not task.done() and source_event_id in ownership.source_event_ids
+            for task, ownership in self._inbox_response_tasks.items()
+        )
 
     @property
     def pending_inbox_response_count(self) -> int:
         """Return an event-loop-local snapshot of runner-owned unsettled responses."""
-        process_owned_responses = set(self._process_shutdown_recovery_checks)
-        generic_response_owners = {
-            task for task in self._inbox_response_tasks if not task.done() and task not in process_owned_responses
-        }
-        orphan_proof_owners = {
-            proof
-            for response, proof in self._recovery_proof_tasks.items()
-            if not proof.done() and response not in process_owned_responses
-        }
-        return len(process_owned_responses) + len(generic_response_owners) + len(orphan_proof_owners)
+        return sum(
+            not task.done() or ownership.drain_intent is not None
+            for task, ownership in self._inbox_response_tasks.items()
+        )
 
     @property
     def pending_response_phase_counts(self) -> dict[str, int]:
-        """Aggregate fixed phases for response and proof owners still retained."""
+        """Aggregate one phase per response and its retained proof."""
         counts: dict[str, int] = {}
-        process_owned_responses = set(self._process_shutdown_recovery_checks)
         for task, ownership in self._inbox_response_tasks.items():
-            if task.done():
+            if task.done() and ownership.drain_intent is None:
                 continue
-            phase = ownership.shutdown_phase_trace.phase
+            phase = ResponseShutdownPhase.RECOVERY_PROOF.value if task.done() else ownership.shutdown_phase_trace.phase
             counts[phase] = counts.get(phase, 0) + 1
-        terminal_process_owners = {task for task in process_owned_responses if task.done()}
-        proof_owners = {
-            proof
-            for response, proof in self._recovery_proof_tasks.items()
-            if not proof.done() and response not in process_owned_responses
-        }
-        recovery_owner_count = len(terminal_process_owners) + len(proof_owners)
-        if recovery_owner_count:
-            phase = ResponseShutdownPhase.RECOVERY_PROOF.value
-            counts[phase] = counts.get(phase, 0) + recovery_owner_count
         return dict(sorted(counts.items()))
 
     @property
@@ -858,7 +833,9 @@ class ResponseRunner:
         return self._process_shutdown_started
 
     def _finish_inbox_response_task(self, task: asyncio.Task[None]) -> None:
-        ownership = self._inbox_response_tasks.pop(task, None)
+        ownership = self._inbox_response_tasks.get(task)
+        if ownership is not None and ownership.drain_intent is None:
+            self._inbox_response_tasks.pop(task)
         if ownership is not None and ownership.source_event_ids:
             self.deps.retry_approval_sources(tuple(ownership.source_event_ids))
         if task.cancelled():
@@ -882,48 +859,54 @@ class ResponseRunner:
         """Signal owned responses before other orderly-shutdown drains spend the budget."""
         self._process_shutdown_started = True
         for task, ownership in tuple(self._inbox_response_tasks.items()):
-            if task.done():
+            if ownership.drain_intent == ORDERLY_SHUTDOWN:
                 continue
-            self._process_shutdown_recovery_checks.setdefault(task, ownership.recovery_proof_ready)
-            task.add_done_callback(self._start_terminal_process_recovery_proof)
-            request_task_cancel(task, process_shutdown=True)
+            if task.done() and ownership.drain_intent is None:
+                continue
+            ownership.drain_intent = ORDERLY_SHUTDOWN
+            if task.done():
+                self._start_terminal_process_recovery_proof(task)
+            else:
+                task.add_done_callback(self._start_terminal_process_recovery_proof)
+                request_task_cancel(task, process_shutdown=True)
 
     async def _evaluate_recovery_proof(
         self,
-        recovery_check: Callable[[], bool | Awaitable[bool]],
-        *,
-        retry_until_ready: bool,
+        ownership: _InboxResponseOwnership,
     ) -> bool:
         """Evaluate one exact durable handoff, following a pending commit."""
         while True:
-            ready = recovery_check()
+            ready = ownership.recovery_proof_ready()
             if inspect.isawaitable(ready):
                 ready = await ready
-            if ready or not retry_until_ready:
+            if ready or ownership.drain_intent != ORDERLY_SHUTDOWN:
                 return bool(ready)
             await asyncio.sleep(_PROCESS_SHUTDOWN_CANCEL_RETRY_SECONDS)
 
     def _ensure_recovery_proof_task(
         self,
         response_task: asyncio.Task[None],
-        recovery_check: Callable[[], bool | Awaitable[bool]],
-        *,
-        retry_until_ready: bool,
+        ownership: _InboxResponseOwnership,
     ) -> asyncio.Task[bool]:
         """Return the single proof owner for one terminal response."""
-        proof_task = self._recovery_proof_tasks.get(response_task)
-        if proof_task is None or proof_task.cancelled():
+        proof_task = ownership.proof_task
+        retry_failed_check = (
+            proof_task is not None
+            and proof_task.done()
+            and not proof_task.cancelled()
+            and proof_task.exception() is None
+            and not proof_task.result()
+            and ownership.drain_intent == ORDERLY_SHUTDOWN
+        )
+        if proof_task is None or proof_task.cancelled() or retry_failed_check:
             proof_task = asyncio.create_task(
-                self._evaluate_recovery_proof(
-                    recovery_check,
-                    retry_until_ready=retry_until_ready,
-                ),
+                self._evaluate_recovery_proof(ownership),
                 name=f"response_recovery_proof:{response_task.get_name()}",
             )
-            self._recovery_proof_tasks[response_task] = proof_task
+            ownership.proof_task = proof_task
             proof_task.add_done_callback(
-                lambda finished, response=response_task: self._finish_recovery_proof_task(
-                    response,
+                lambda finished: self._finish_recovery_proof_task(
+                    ownership,
                     finished,
                 ),
             )
@@ -934,29 +917,26 @@ class ResponseRunner:
         response_task: asyncio.Task[None],
     ) -> None:
         """Use the remaining cleanup window once one response is terminal."""
-        recovery_check = self._process_shutdown_recovery_checks.get(response_task)
-        if recovery_check is None:
+        ownership = self._inbox_response_tasks.get(response_task)
+        if ownership is None or ownership.drain_intent != ORDERLY_SHUTDOWN:
             return
         if not response_task.cancelled() and response_task.exception() is None:
             return
         self._ensure_recovery_proof_task(
             response_task,
-            recovery_check,
-            retry_until_ready=True,
+            ownership,
         )
 
     async def _recovery_proofs_are_ready(
         self,
-        tasks: set[asyncio.Task[None]],
-        recovery_checks: dict[asyncio.Task[None], Callable[[], bool | Awaitable[bool]]],
+        ownerships: dict[asyncio.Task[None], _InboxResponseOwnership],
         *,
         deadline: float | None = None,
-        retry_until_ready: bool = False,
     ) -> bool:
         """Prove terminal tasks transferred ownership within the drain deadline."""
-        if any(not task.done() for task in tasks):
+        if any(not task.done() for task in ownerships):
             return False
-        proof_targets = {task for task in tasks if task.cancelled() or task.exception() is not None}
+        proof_targets = {task for task in ownerships if task.cancelled() or task.exception() is not None}
         if not proof_targets:
             return True
 
@@ -964,8 +944,7 @@ class ResponseRunner:
             proof_tasks = {
                 self._ensure_recovery_proof_task(
                     response_task,
-                    recovery_checks[response_task],
-                    retry_until_ready=retry_until_ready,
+                    ownerships[response_task],
                 )
                 for response_task in proof_targets
             }
@@ -990,40 +969,20 @@ class ResponseRunner:
 
     def _finish_recovery_proof_task(
         self,
-        response_task: asyncio.Task[None],
+        ownership: _InboxResponseOwnership,
         proof_task: asyncio.Task[bool],
     ) -> None:
         """Retain a proof result for cleanup retry, or forget a cancelled read."""
         if proof_task.cancelled():
-            if self._recovery_proof_tasks.get(response_task) is proof_task:
-                self._recovery_proof_tasks.pop(response_task, None)
+            if ownership.proof_task is proof_task:
+                ownership.proof_task = None
             return
         proof_task.exception()
 
-    def _forget_process_shutdown_recovery(
-        self,
-        tasks: set[asyncio.Task[None]],
-    ) -> None:
-        """Release terminal response proof state after its result is consumed."""
+    def _release_response_ownership(self, tasks: set[asyncio.Task[None]]) -> None:
+        """Release terminal response records after their proof results are consumed."""
         for task in tasks:
-            self._process_shutdown_recovery_checks.pop(task, None)
-            self._recovery_proof_tasks.pop(task, None)
-
-    async def _bounded_recovery_proofs_are_ready(
-        self,
-        tasks: set[asyncio.Task[None]],
-        recovery_checks: dict[asyncio.Task[None], Callable[[], bool | Awaitable[bool]]],
-        *,
-        deadline: float,
-        process_shutdown_tasks: set[asyncio.Task[None]],
-    ) -> bool:
-        """Run process-shutdown proofs without losing a timed-out obligation."""
-        return await self._recovery_proofs_are_ready(
-            tasks,
-            recovery_checks,
-            deadline=deadline,
-            retry_until_ready=bool(process_shutdown_tasks),
-        )
+            self._inbox_response_tasks.pop(task, None)
 
     async def finish_process_shutdown_recovery(
         self,
@@ -1055,71 +1014,46 @@ class ResponseRunner:
         remains live after that cleanup window fails the shutdown boundary;
         callers must not release resources it can still use.
         """
-        tasks = list(
-            {
-                *(task for task in self._inbox_response_tasks if not task.done()),
-                *self._process_shutdown_recovery_checks,
-            },
-        )
-        # Done callbacks pop tasks, so snapshot proofs before an await can run them.
-        recovery_checks = {
-            task: (
-                self._process_shutdown_recovery_checks[task]
-                if task in self._process_shutdown_recovery_checks
-                else self._inbox_response_tasks[task].recovery_proof_ready
-            )
-            for task in tasks
+        ownerships = {
+            task: ownership
+            for task, ownership in self._inbox_response_tasks.items()
+            if not task.done() or ownership.drain_intent is not None
         }
-        if not tasks:
+        if not ownerships:
             return True
-        if cancel_after_seconds is None:
-            await asyncio.gather(*tasks, return_exceptions=True)
-            process_shutdown_tasks = set(self._process_shutdown_recovery_checks).intersection(tasks)
-            if not process_shutdown_tasks:
-                return True
-            recoverable = await self._recovery_proofs_are_ready(
-                process_shutdown_tasks,
-                recovery_checks,
-                retry_until_ready=True,
-            )
-            self._incomplete_inbox_responses_recoverable &= recoverable
-            self._forget_process_shutdown_recovery(process_shutdown_tasks)
-            return recoverable
         loop = asyncio.get_running_loop()
-        cancel_after_seconds = max(0.0, cancel_after_seconds)
-        proof_deadline = loop.time() + 2 * cancel_after_seconds
-        process_shutdown_tasks = set(self._process_shutdown_recovery_checks).intersection(tasks)
-        _done, pending = await asyncio.wait(tasks, timeout=cancel_after_seconds)
-        if not pending:
-            if not process_shutdown_tasks:
-                return True
-            recoverable = await self._bounded_recovery_proofs_are_ready(
-                process_shutdown_tasks,
-                recovery_checks,
-                deadline=proof_deadline,
-                process_shutdown_tasks=process_shutdown_tasks,
+        deadline = None if cancel_after_seconds is None else loop.time() + 2 * max(0.0, cancel_after_seconds)
+        if cancel_after_seconds is None:
+            await asyncio.gather(*ownerships, return_exceptions=True)
+            pending: set[asyncio.Task[None]] = set()
+        else:
+            _done, pending = await asyncio.wait(ownerships, timeout=max(0.0, cancel_after_seconds))
+        cancelled = bool(pending)
+        for task in pending:
+            # Retain the same record before cancellation can run its done callback.
+            if ownerships[task].drain_intent is None:
+                ownerships[task].drain_intent = GENERIC_SHUTDOWN
+        if pending:
+            assert deadline is not None
+            pending = await _cancel_pending_responses(
+                pending,
+                timeout_seconds=max(0.0, deadline - loop.time()),
+                shutdown_intent=shutdown_intent,
             )
-            self._incomplete_inbox_responses_recoverable &= recoverable
-            self._forget_process_shutdown_recovery(process_shutdown_tasks)
-            return recoverable
-        cancelled_tasks = process_shutdown_tasks.union(pending)
-        pending = await _cancel_pending_responses(
-            pending,
-            timeout_seconds=max(0.0, proof_deadline - loop.time()),
-            shutdown_intent=shutdown_intent,
+        proof_targets = {
+            task: ownership for task, ownership in ownerships.items() if ownership.drain_intent is not None
+        }
+        process_shutdown = any(ownership.drain_intent == ORDERLY_SHUTDOWN for ownership in ownerships.values())
+        recoverable = await self._recovery_proofs_are_ready(
+            proof_targets,
+            deadline=deadline,
         )
-        cancelled_responses_recoverable = await self._bounded_recovery_proofs_are_ready(
-            cancelled_tasks,
-            recovery_checks,
-            deadline=proof_deadline,
-            process_shutdown_tasks=process_shutdown_tasks,
-        )
-        self._incomplete_inbox_responses_recoverable &= cancelled_responses_recoverable
+        self._incomplete_inbox_responses_recoverable &= recoverable
         if pending:
             msg = f"{len(pending)} response tasks did not stop within bounded cleanup"
             raise ResponseShutdownTimeoutError(msg)
-        self._forget_process_shutdown_recovery(process_shutdown_tasks)
-        return cancelled_responses_recoverable if process_shutdown_tasks else False
+        self._release_response_ownership(set(proof_targets))
+        return recoverable if process_shutdown else not cancelled
 
     async def wait_for_source_owned_inbox_responses(self) -> None:
         """Wait for detached responses that still own durable journal sources."""

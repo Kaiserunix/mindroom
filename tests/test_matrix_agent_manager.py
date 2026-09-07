@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import os
 from typing import TYPE_CHECKING, Self
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import httpx
@@ -1616,9 +1616,10 @@ class TestAgentLogin:
             order.append("credentials_closed")
             return credentials
 
-        async def open_owned(*_args: object, **_kwargs: object) -> object:
+        async def open_owned(*_args: object, persist_credentials: object, **_kwargs: object) -> object:
             assert order == ["credentials_closed"]
             order.append("owned_opened")
+            persist_credentials(owned_client)
             return opened
 
         with (
@@ -1656,6 +1657,7 @@ class TestAgentLogin:
             agent_user.user_id,
             TEST_PASSWORD,
             runtime_paths,
+            device_id=None,
         )
         open_session.assert_awaited_once_with(
             "http://localhost:8008",
@@ -1664,6 +1666,7 @@ class TestAgentLogin:
             consumer_store=consumer_store,
             new_consumer_generation=generation,
             config=config,
+            persist_credentials=ANY,
         )
         persist.assert_called_once()
         cross_signing.assert_awaited_once_with(owned_client, agent_user)

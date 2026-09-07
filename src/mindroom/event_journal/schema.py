@@ -81,14 +81,6 @@ _TABLES = (
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS matrix_ingestion_receipts (
-        principal_id TEXT NOT NULL,
-        stream_id TEXT NOT NULL,
-        sequence BIGINT NOT NULL CHECK (sequence >= 1 AND sequence <= 9223372036854775806),
-        PRIMARY KEY (principal_id, stream_id, sequence)
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS matrix_ingestion_membership (
         principal_id TEXT NOT NULL,
         room_id TEXT NOT NULL,

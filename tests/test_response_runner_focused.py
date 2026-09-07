@@ -776,17 +776,17 @@ async def test_recovery_proofs_wait_until_every_response_is_terminal() -> None:
         return True
 
     finished_task = asyncio.create_task(finished_response())
-    live_task = asyncio.create_task(live_response())
+    live_task = runner.track_inbox_response(
+        live_response(),
+        name="terminal_gate",
+        recovery_proof_ready=stuck_recovery_proof,
+    )
     await finished_task
 
     try:
         assert (
             await runner._recovery_proofs_are_ready(
-                {finished_task, live_task},
-                {
-                    finished_task: stuck_recovery_proof,
-                    live_task: lambda: True,
-                },
+                dict(runner._inbox_response_tasks),
                 deadline=asyncio.get_running_loop().time() + 0.02,
             )
             is False
@@ -7811,3 +7811,175 @@ async def test_apply_post_response_effects_gates_success_only_side_effects() -> 
     # The failed delivery added neither memory persistence nor run-event linkage.
     assert memory_calls == ["memory"]
     assert persisted == [("run-1", "$response")]
+
+
+@pytest.mark.asyncio
+async def test_generic_retry_reuses_cancelled_offloaded_proof() -> None:
+    """A retry retains the cancelling store read until it can safely be replaced."""
+    runner = ResponseRunner(deps=MagicMock())
+    started = asyncio.Event()
+    proof_started = asyncio.Event()
+    proof_cancelled = asyncio.Event()
+    release_proof = asyncio.Event()
+    proof_calls = 0
+
+    async def response() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    async def proof() -> bool:
+        nonlocal proof_calls
+        proof_calls += 1
+        proof_started.set()
+        try:
+            await release_proof.wait()
+        except asyncio.CancelledError:
+            proof_cancelled.set()
+            await release_proof.wait()
+            raise
+        return True
+
+    task = runner.track_inbox_response(
+        response(),
+        name="generic_offloaded",
+        recovery_proof_ready=proof,
+        source_event_ids=("$source",),
+    )
+    await started.wait()
+    with pytest.raises(response_runner.ResponseShutdownTimeoutError):
+        await runner.drain_inbox_responses(cancel_after_seconds=0.01)
+    await proof_started.wait()
+    await proof_cancelled.wait()
+    assert runner.pending_inbox_response_count == 1
+    assert not runner.has_live_inbox_response("$source")
+    second = asyncio.create_task(runner.drain_inbox_responses(cancel_after_seconds=0.1))
+    await asyncio.sleep(0)
+    assert proof_calls == 1
+    assert runner.pending_inbox_response_count == 1
+    assert not runner.has_live_inbox_response("$source")
+    release_proof.set()
+    assert await second
+    assert proof_calls == 2
+    assert runner.pending_inbox_response_count == 0
+    await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_generic_drain_keeps_proof_owner() -> None:
+    """Cancelling a drain cannot orphan a proof that still uses shared resources."""
+    runner = ResponseRunner(deps=MagicMock())
+    started = asyncio.Event()
+    proof_started = asyncio.Event()
+    release_proof = asyncio.Event()
+    proof_calls = 0
+
+    async def response() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    async def proof() -> bool:
+        nonlocal proof_calls
+        proof_calls += 1
+        proof_started.set()
+        while not release_proof.is_set():
+            with suppress(asyncio.CancelledError):
+                await release_proof.wait()
+        return True
+
+    task = runner.track_inbox_response(
+        response(),
+        name="cancelled_generic",
+        recovery_proof_ready=proof,
+        source_event_ids=("$source",),
+    )
+    await started.wait()
+    draining = asyncio.create_task(runner.drain_inbox_responses(cancel_after_seconds=0.1))
+    await proof_started.wait()
+    draining.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await draining
+    assert runner.pending_inbox_response_count == 1
+    assert not runner.has_live_inbox_response("$source")
+    release_proof.set()
+    assert await runner.drain_inbox_responses(cancel_after_seconds=0.1)
+    assert proof_calls == 1
+    assert runner.pending_inbox_response_count == 0
+    await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("completed_before_promotion", [False, True])
+async def test_generic_to_process_proof_promotion_retries_false_result(completed_before_promotion: bool) -> None:
+    """Orderly shutdown keeps checking a generic proof promoted while its read is pending."""
+    runner = ResponseRunner(deps=MagicMock())
+    started = asyncio.Event()
+    proof_started = asyncio.Event()
+    release_proof = asyncio.Event()
+    proof_calls = 0
+
+    async def response() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    async def proof() -> bool:
+        nonlocal proof_calls
+        proof_calls += 1
+        if proof_calls > 1:
+            return True
+        proof_started.set()
+        while not release_proof.is_set():
+            with suppress(asyncio.CancelledError):
+                await release_proof.wait()
+        return False
+
+    task = runner.track_inbox_response(
+        response(),
+        name="promoted_generic",
+        recovery_proof_ready=proof,
+        source_event_ids=("$source",),
+    )
+    await started.wait()
+    with pytest.raises(response_runner.ResponseShutdownTimeoutError):
+        await runner.drain_inbox_responses(cancel_after_seconds=0.01)
+    await proof_started.wait()
+    if completed_before_promotion:
+        release_proof.set()
+        await asyncio.sleep(0)
+    runner.begin_process_shutdown()
+    release_proof.set()
+    assert await runner.drain_inbox_responses(cancel_after_seconds=0.1, shutdown_intent=ORDERLY_SHUTDOWN)
+    assert proof_calls == 2
+    assert runner.pending_inbox_response_count == 0
+    await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_overlapping_drains_keep_snapshot_ownership() -> None:
+    """One drain may consume ownership while another still holds its terminal record."""
+    runner = ResponseRunner(deps=MagicMock())
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_second = asyncio.Event()
+
+    async def first_response() -> None:
+        first_started.set()
+        await asyncio.Event().wait()
+
+    async def second_response() -> None:
+        second_started.set()
+        await release_second.wait()
+
+    first = runner.track_inbox_response(first_response(), name="first_snapshot", recovery_proof_ready=lambda: True)
+    await first_started.wait()
+    first_drain = asyncio.create_task(runner.drain_inbox_responses(cancel_after_seconds=0.01))
+    await asyncio.sleep(0)
+    second = runner.track_inbox_response(second_response(), name="second_snapshot", recovery_proof_ready=lambda: True)
+    await second_started.wait()
+    second_drain = asyncio.create_task(runner.drain_inbox_responses(cancel_after_seconds=0.1))
+    assert not await first_drain
+    assert runner.pending_inbox_response_count == 1
+    assert not runner.has_live_inbox_response("$source")
+    release_second.set()
+    assert await second_drain
+    assert runner.pending_inbox_response_count == 0
+    await asyncio.gather(first, second, return_exceptions=True)

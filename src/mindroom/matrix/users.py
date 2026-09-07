@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, partial
 from uuid import UUID
 
 import httpx
@@ -1069,40 +1069,22 @@ async def _owned_agent_credentials(
     runtime_paths: RuntimePaths,
 ) -> tuple[MatrixCredentials, str, bool]:
     """Resolve exact credentials without opening an ordinary MatrixStore."""
-    store_intact = not crypto.ENCRYPTION_ENABLED or (
-        agent_user.device_id is None
-        or olm_store_exists(
+    if agent_user.device_id is not None:
+        if not olm_store_exists(expected_user_id, agent_user.device_id, runtime_paths):
+            msg = "The Matrix device store is missing; restore its backup before restarting. Automatic device replacement is unsupported"
+            raise matrix_startup_error(msg, permanent=True)
+        if not agent_user.access_token:
+            msg = "Stored Matrix device credentials are incomplete; restore them before restarting"
+            raise matrix_startup_error(msg, permanent=True)
+        restored = await restore_credentials(
+            homeserver,
             expected_user_id,
             agent_user.device_id,
+            agent_user.access_token,
             runtime_paths,
         )
-    )
-    if store_intact and agent_user.access_token and agent_user.device_id:
-        try:
-            restored = await restore_credentials(
-                homeserver,
-                expected_user_id,
-                agent_user.device_id,
-                agent_user.access_token,
-                runtime_paths,
-            )
-        except ValueError:
-            logger.warning(
-                "matrix_login_restore_failed_falling_back_to_configured_auth",
-                agent=agent_user.agent_name,
-                user_id=agent_user.user_id,
-                device_id=agent_user.device_id,
-            )
-        else:
-            if restored.user_id == expected_user_id:
-                return restored, "Matrix session restore", False
-            logger.warning(
-                "matrix_login_restore_identity_mismatch_falling_back_to_configured_auth",
-                agent=agent_user.agent_name,
-                expected_user_id=expected_user_id,
-                returned_user_id=restored.user_id,
-                device_id=agent_user.device_id,
-            )
+        if restored is not None:
+            return restored, "Matrix session restore", False
 
     if auth.mode == "appservice":
         assert auth.appservice_token is not None
@@ -1111,6 +1093,7 @@ async def _owned_agent_credentials(
             user_id=expected_user_id,
             token=auth.appservice_token,
             runtime_paths=runtime_paths,
+            device_id=agent_user.device_id,
         )
         return (
             MatrixCredentials(*credentials),
@@ -1126,6 +1109,7 @@ async def _owned_agent_credentials(
             expected_user_id,
             agent_user.password,
             runtime_paths,
+            device_id=agent_user.device_id,
         ),
         "Matrix password login",
         False,
@@ -1163,6 +1147,11 @@ async def login_agent_owned_session(
         auth,
         runtime_paths,
     )
+    if credentials.user_id != expected_user_id or (
+        agent_user.device_id is not None and credentials.device_id != agent_user.device_id
+    ):
+        msg = f"{source} changed the managed account or device; restore the original device before restarting"
+        raise matrix_startup_error(msg, permanent=True)
     opened = await open_owned_matrix_session(
         homeserver,
         credentials,
@@ -1170,13 +1159,14 @@ async def login_agent_owned_session(
         consumer_store=consumer_store,
         new_consumer_generation=new_consumer_generation,
         config=config,
+        persist_credentials=partial(
+            _persist_authenticated_agent_session,
+            agent_user,
+            runtime_paths=runtime_paths,
+            matrix_id=MatrixID.parse(expected_user_id),
+        ),
     )
     try:
-        matrix_id = _validated_authenticated_agent_matrix_id(
-            opened.client,
-            expected_user_id=expected_user_id,
-            source=source,
-        )
         if set_appservice_display_name:
             display_response = await opened.client.set_displayname(
                 agent_user.display_name,
@@ -1187,12 +1177,6 @@ async def login_agent_owned_session(
                     user_id=expected_user_id,
                     error=str(display_response),
                 )
-        _persist_authenticated_agent_session(
-            agent_user,
-            opened.client,
-            runtime_paths,
-            matrix_id=matrix_id,
-        )
         await ensure_agent_cross_signing(opened.client, agent_user)
     except BaseException:
         await _close_failed_owned_agent_login(opened)

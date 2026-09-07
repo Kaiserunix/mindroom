@@ -58,8 +58,8 @@ Matrix callback
 
 ## Durable Dispatch Boundary
 
-Nio's owned ingestion session persists prepared source work, and MindRoom's batch pump validates and commits each receipt and semantic effect before acknowledging the batch.
-The pump wakes journal dispatch only after settlement; a crash between journal commit and Nio acknowledgement replays the receipt without duplicating semantic work.
+Nio's owned ingestion session persists prepared source work, and MindRoom's batch pump validates and commits its sequence advance and semantic effects before acknowledging the batch.
+The pump wakes journal dispatch after batch acknowledgement; a crash between journal commit and Nio acknowledgement replays the batch without duplicating semantic work.
 Room-backed authorization uses authenticated batch provenance: uncertainty revokes grants before admission, and live membership changes update grants after admission.
 Every principal shares one durable store at `tracking/event_journal.db`, or one PostgreSQL database, and each bot reads only its own principal-bound view of it.
 Writes are serialized per store rather than per entity, so one principal's admission waits behind another's write transaction; the reader pool is separate, so reads do not.
@@ -89,10 +89,10 @@ Deleting an unrecoverable pending row is a last resort that accepts losing that 
 Message and media obligations remain unsettled only while their callback, gate, competing turn claim, retry, or a pending `TurnStore` response owns them, then yield only to an explicit settlement.
 Recovery intent travels with queued ingress so pre-existing lane and coalescing workers cannot turn a temporarily unavailable recovered router target into a terminal fallback response.
 Nio 1.0 owns receive cursors, prepared source batches, provenance, and recognition of local membership echoes.
-MindRoom commits each batch's receipt, membership effects, semantic events, and projection together, then runs ordered application hooks before acknowledging that batch.
-Each consumer retains only its latest batch receipt, pruned in the admission transaction; earlier sequences cannot replay.
+MindRoom commits each batch's sequence advance, membership effects, semantic events, and projection together, then runs ordered application hooks before acknowledging that batch.
+Each consumer keeps one admitted sequence boundary; earlier or skipped sequences cannot replay.
 A failed admission leaves the batch available for retry; a failure after commit retries its remaining hooks without admitting the semantic events twice.
-The journal retains the last admitted producer membership separately from the tenure attached to existing application work, so adopting an ordinary nio store does not renumber old journal events or deliveries.
+The journal retains producer membership positions separately from the application tenures attached to events and deliveries.
 An admitted departure advances the application tenure and invalidates old conversation projections, pending work, approvals, and unsent deliveries.
 Attempted deliveries retain their frozen transaction identity for exact reconciliation.
 MindRoom keeps no separate departure-echo counters or reported-departure alias runs.
@@ -100,7 +100,7 @@ Local joins and leaves use nio's durable membership command, waiting for earlier
 MindRoom keeps authoritative joined-member lookups in an application cache for responder and display-name decisions, without changing nio's room members or certifying its projection as complete.
 Nio alone owns encryption recipients and room-key sharing.
 Application lookups are reused until the room projection changes, a membership or history-loss record arrives, or nio replaces the room; concurrent lookups share one request.
-Nio history-loss records create a durable `room_history_recovery` obligation in the same transaction as the batch receipt.
+Nio history-loss records create a durable `room_history_recovery` obligation in the same transaction as the admitted sequence.
 The obligation exists even when the projection is empty, and recording it retracts completeness for every room and thread marker.
 A repairable room reads as unhydrated for every conversation in it, so the next read walks `/messages` past the prompt window until readable server exhaustion or a configured cost ceiling.
 Only readable server exhaustion clears the obligation; malformed or unreadable events fail the read and leave it repairable, while a cost ceiling retains a truncated obligation and bounded context without claiming completeness.
@@ -112,7 +112,7 @@ Application first-sync readiness remains separate from the transport cursor and 
 Historical events update the conversation projection without starting a turn.
 The same event-scoped provenance gates auxiliary room callbacks, so one live event cannot license unrelated historical call-state mutations.
 `SyncContinuityStore` persists only pending join/decrypt fences, with locked fresh-read updates and crash-atomic replacement.
-Its v4 format preserves fences read from v2 and v3 files while ignoring their obsolete checkpoint field; the next fence change writes the fence-only format.
+Only the v4 fence format is accepted; older continuity files must be archived during the explicit upgrade cutover.
 Malformed fence records fail closed, and reads and writes run off the event loop.
 Live `room-member-joined` hooks remain at-least-once because hook emission happens before durable settlement.
 Invite callbacks have no stable event ID for a semantic journal row, so their pending room and inviter are persisted before background handling starts.

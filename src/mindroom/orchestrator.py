@@ -69,7 +69,6 @@ from mindroom.mcp.registry import mcp_tool_name
 from mindroom.mcp.toolkit import bind_mcp_server_manager
 from mindroom.memory import MemoryAutoFlushWorker, auto_flush_enabled
 from mindroom.response_admission import ResponseAdmissionGate
-from mindroom.response_shutdown_diagnostics import DeferredStopPhase
 from mindroom.runtime_shutdown import (
     ENTITY_REMOVED_SHUTDOWN,
     ORDERLY_SHUTDOWN,
@@ -158,10 +157,7 @@ def _aggregate_response_phase_counts(bots: Iterable[AgentBot]) -> dict[str, int]
     """Sum fixed response phase counts across bots for one shutdown warning."""
     aggregate: dict[str, int] = {}
     for bot in bots:
-        phase_counts = bot.pending_response_phase_counts
-        if not isinstance(phase_counts, dict):
-            continue
-        for phase, count in phase_counts.items():
+        for phase, count in bot.pending_response_phase_counts.items():
             aggregate[phase] = aggregate.get(phase, 0) + count
     return dict(sorted(aggregate.items()))
 
@@ -170,12 +166,9 @@ def _aggregate_deferred_stop_phase_counts(bots: Iterable[AgentBot]) -> dict[str,
     """Count fixed deferred-release phases without exposing bot identities."""
     aggregate: dict[str, int] = {}
     for bot in bots:
-        phase = getattr(bot, "deferred_stop_phase", None)
-        try:
-            fixed_phase = DeferredStopPhase(phase)
-        except (TypeError, ValueError):
-            continue
-        aggregate[fixed_phase.value] = aggregate.get(fixed_phase.value, 0) + 1
+        phase = bot.deferred_stop_phase
+        if phase is not None:
+            aggregate[phase] = aggregate.get(phase, 0) + 1
     return dict(sorted(aggregate.items()))
 
 
@@ -201,9 +194,7 @@ async def _gather_periodic_shutdown_phase(
         nonlocal timer
         if phase.done():
             return
-        pending_response_owner_count = sum(
-            count for bot in bots if isinstance((count := bot.pending_response_owner_count), int)
-        )
+        pending_response_owner_count = sum(bot.pending_response_owner_count for bot in bots)
         logger.warning(
             event,
             live_response_owner_count=pending_response_owner_count,
@@ -2459,9 +2450,7 @@ class _MultiAgentOrchestrator:
         if cancellation is not None:
             phase_cancellations.append(cancellation)
         deferred_bots = [bot for bot in stopping_bots if bot.deferred_stop_required is True]
-        pre_deferred_response_owner_count = sum(
-            count for bot in self.agent_bots.values() if isinstance((count := bot.pending_response_owner_count), int)
-        )
+        pre_deferred_response_owner_count = sum(bot.pending_response_owner_count for bot in self.agent_bots.values())
         if pre_deferred_response_owner_count > 0:
             logger.warning(
                 "orchestrator_response_shutdown_owners_pending",
@@ -2487,9 +2476,7 @@ class _MultiAgentOrchestrator:
             )
             if cancellation is not None:
                 phase_cancellations.append(cancellation)
-        pending_response_owner_count = sum(
-            count for bot in self.agent_bots.values() if isinstance((count := bot.pending_response_owner_count), int)
-        )
+        pending_response_owner_count = sum(bot.pending_response_owner_count for bot in self.agent_bots.values())
         pending_response_phase_counts = _aggregate_response_phase_counts(self.agent_bots.values())
         await _run_shutdown_step("attachment_cleanup", wait_for_attachment_cleanup_tasks())
         # Last, because every bot borrows it: closing it earlier would pull the
@@ -2884,10 +2871,12 @@ async def _finish_runtime_shutdown(
     await _cancel_task_if_pending(shutdown_wait_task)
     await _cancel_task_if_pending(api_task)
     try:
-        if orchestrator is not None:
-            await orchestrator.stop()
+        try:
+            await _cancel_task_if_pending(orchestrator_task)
+        finally:
+            if orchestrator is not None:
+                await orchestrator.stop()
     finally:
-        await _cancel_task_if_pending(orchestrator_task)
         for task in auxiliary_tasks:
             task.cancel()
         for task in auxiliary_tasks:

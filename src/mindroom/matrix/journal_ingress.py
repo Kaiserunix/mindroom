@@ -1,10 +1,8 @@
-"""The one boundary where Matrix events become durable MindRoom facts.
+"""Classify nio timeline records and reconstruct stored MindRoom events.
 
-nio decides what is live, recovered, or cold history. This module translates
-that decision into whether an event may start work, and commits the event
-before telling nio it was accepted. MindRoom never re-derives provenance from
-cursors, timestamps, membership repetition, or pagination shapes: those
-inferences are what the recovery bugs were made of.
+Nio decides what is live, recovered, or cold history; this module translates
+that provenance into application actionability. Durable batch admission and
+acknowledgement belong to matrix/durable_ingestion.py.
 """
 
 from __future__ import annotations

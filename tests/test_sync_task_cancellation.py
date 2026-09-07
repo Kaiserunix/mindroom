@@ -72,7 +72,7 @@ from mindroom.orchestrator import (
     _MultiAgentOrchestrator,
     _run_shutdown_step,
 )
-from mindroom.response_runner import ResponseRunner, ResponseShutdownTimeoutError
+from mindroom.response_runner import ResponseRunner, ResponseShutdownTimeoutError, _InboxResponseOwnership
 from mindroom.runtime_shutdown import (
     ENTITY_REMOVED_SHUTDOWN,
     GENERIC_SHUTDOWN,
@@ -103,6 +103,18 @@ async def _complete_frame(bot: AgentBot, index: int = 0) -> None:
     """Drive runtime side effects through the durable completion owner."""
     del index
     await bot._on_ingestion_frame_completion()
+
+
+def _shutdown_bot_mock() -> AsyncMock:
+    """Model the typed ownership snapshots used by orchestrator shutdown."""
+    return AsyncMock(
+        spec=AgentBot,
+        running=False,
+        pending_response_owner_count=0,
+        pending_response_phase_counts={},
+        deferred_stop_phase=None,
+        deferred_stop_required=False,
+    )
 
 
 def _fake_runtime_paths(**env_overrides: str) -> RuntimePaths:
@@ -2455,7 +2467,7 @@ async def test_stop_entities_quiesces_all_sources_concurrently() -> None:
 
     agent_bots: dict[str, AsyncMock] = {}
     for entity_name in ("agent1", "agent2"):
-        bot = AsyncMock()
+        bot = _shutdown_bot_mock()
 
         async def named_quiesce(name: str = entity_name) -> None:
             await hold_quiesce(name)
@@ -2495,7 +2507,7 @@ async def test_stop_entities_finishes_cleanup_after_cancellation_during_quiesce(
     """Caller cancellation is reported only after durable ownership is released."""
     quiesce_entered = asyncio.Event()
     release_quiesce = asyncio.Event()
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
 
     async def hold_quiesce() -> None:
         quiesce_entered.set()
@@ -2534,7 +2546,7 @@ async def test_stop_entities_finishes_cleanup_after_cancellation_during_quiesce(
 async def test_stop_entities_cleans_up_before_reporting_source_quiesce_failure() -> None:
     """A failed source barrier must not strand live sync/store ownership."""
     failure = RuntimeError("source quiesce failed")
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot._quiesce_matrix_ingestion = AsyncMock(side_effect=failure)
     bot.prepare_for_sync_shutdown = AsyncMock()
     bot.stop = AsyncMock()
@@ -2565,7 +2577,7 @@ async def test_stop_entities_prioritizes_quiesce_failure_after_cleanup_failures(
     """Every cleanup stage runs while the source-barrier error stays primary."""
     quiesce_failure = RuntimeError("source quiesce failed")
     cleanup_failure = RuntimeError("cleanup failed")
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot._quiesce_matrix_ingestion = AsyncMock(side_effect=quiesce_failure)
     bot.prepare_for_sync_shutdown = AsyncMock(side_effect=cleanup_failure)
     bot.stop = AsyncMock(side_effect=cleanup_failure)
@@ -2687,7 +2699,7 @@ async def test_start_runtime_waits_for_shutdown_after_initial_sync_generation_ex
     config.event_journal = MagicMock()
     orchestrator.config = config
 
-    router_bot = AsyncMock()
+    router_bot = _shutdown_bot_mock()
     router_bot.agent_name = "router"
     router_bot.matrix_id = MatrixID.parse("@mindroom_router:localhost")
     router_bot.running = True
@@ -2695,7 +2707,7 @@ async def test_start_runtime_waits_for_shutdown_after_initial_sync_generation_ex
     router_bot.schedule_reply_authorized_call_reconciliation = MagicMock()
     router_bot.schedule_reply_authorized_call_revocation = MagicMock()
 
-    general_bot = AsyncMock()
+    general_bot = _shutdown_bot_mock()
     general_bot.agent_name = "general"
     general_bot.matrix_id = MatrixID.parse("@mindroom_general:localhost")
     general_bot.running = True
@@ -2759,7 +2771,7 @@ async def test_start_runtime_ingests_before_membership_setup_but_defers_semantic
     config.event_journal = MagicMock()
     orchestrator.config = config
 
-    router_bot = MagicMock(spec=AgentBot)
+    router_bot = _shutdown_bot_mock()
     router_bot.agent_name = "router"
     router_bot.matrix_id = MatrixID.parse("@mindroom_router:localhost")
     router_bot.running = True
@@ -2770,7 +2782,7 @@ async def test_start_runtime_ingests_before_membership_setup_but_defers_semantic
     router_bot.release_pending_turn_journal_replay = MagicMock()
     router_bot.first_sync_complete = True
 
-    general_bot = MagicMock(spec=AgentBot)
+    general_bot = _shutdown_bot_mock()
     general_bot.agent_name = "general"
     general_bot.matrix_id = MatrixID.parse("@mindroom_general:localhost")
     general_bot.running = True
@@ -2869,14 +2881,14 @@ def _orchestrator_with_membership_startup_bots(
     config.mcp_servers = {}
     config.event_journal = MagicMock()
     orchestrator.config = config
-    router_bot = AsyncMock()
+    router_bot = _shutdown_bot_mock()
     router_bot.agent_name = "router"
     router_bot.matrix_id = MatrixID.parse("@mindroom_router:localhost")
     router_bot.running = True
     router_bot.stop = AsyncMock()
     router_bot.schedule_reply_authorized_call_reconciliation = MagicMock()
     router_bot.schedule_reply_authorized_call_revocation = MagicMock()
-    general_bot = AsyncMock()
+    general_bot = _shutdown_bot_mock()
     general_bot.agent_name = "general"
     general_bot.matrix_id = MatrixID.parse("@mindroom_general:localhost")
     general_bot.running = True
@@ -3244,7 +3256,7 @@ async def test_new_agent_not_started_twice(tmp_path: Path) -> None:
             *_args: object,
             **_kwargs: object,
         ) -> AsyncMock:
-            bot = AsyncMock()
+            bot = _shutdown_bot_mock()
             bot.matrix_id = agent_user.matrix_id
             bot.try_start = AsyncMock(return_value=True)
             bot.sync_forever = AsyncMock()
@@ -3308,6 +3320,12 @@ async def test_orchestrator_stop_cancels_all_tasks(tmp_path: Path) -> None:
         mock_bot1.running = True
         mock_bot2 = AsyncMock()
         mock_bot2.running = True
+
+        for mock_bot in (mock_bot1, mock_bot2):
+            mock_bot.pending_response_owner_count = 0
+            mock_bot.pending_response_phase_counts = {}
+            mock_bot.deferred_stop_phase = None
+            mock_bot.deferred_stop_required = False
 
         async def track_source_quiesce() -> None:
             shutdown_order.append("source_quiesce")
@@ -3407,7 +3425,7 @@ async def test_orchestrator_stop_prioritizes_quiesce_failure_after_cleanup_failu
     """Orderly stop releases every resource before surfacing its barrier error."""
     quiesce_failure = RuntimeError("source quiesce failed")
     cleanup_failure = RuntimeError("cleanup failed")
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
     bot._quiesce_matrix_ingestion = AsyncMock(side_effect=quiesce_failure)
     bot.stop = AsyncMock(side_effect=cleanup_failure)
@@ -3451,7 +3469,7 @@ async def test_orchestrator_stop_retains_shared_journal_while_response_owner_is_
 ) -> None:
     """A live response owner keeps the shared journal open for its bounded unwind."""
     response_failure = ResponseShutdownTimeoutError("response still owns runtime resources")
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
     bot._quiesce_matrix_ingestion = AsyncMock()
     bot.pending_response_owner_count = 1
@@ -3494,7 +3512,7 @@ async def test_orchestrator_logs_response_phases_before_blocking_deferred_cleanu
     response_failure = ResponseShutdownTimeoutError("response still owns runtime resources")
     deferred_started = asyncio.Event()
     release_deferred = asyncio.Event()
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
     bot._quiesce_matrix_ingestion = AsyncMock()
     bot.pending_response_owner_count = 1
@@ -3781,7 +3799,7 @@ async def test_orchestrator_logs_ordinary_resource_phase_while_bot_stop_blocks(
     """A zero-owner resource stall emits its fixed phase before bot-stop returns."""
     stop_started = asyncio.Event()
     release_stop = asyncio.Event()
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
     bot._quiesce_matrix_ingestion = AsyncMock()
     bot.pending_response_owner_count = 0
@@ -3845,7 +3863,7 @@ async def test_orchestrator_logs_deferred_resource_phase_while_cleanup_blocks(
     response_failure = ResponseShutdownTimeoutError("response still owns runtime resources")
     deferred_started = asyncio.Event()
     release_deferred = asyncio.Event()
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
     bot._quiesce_matrix_ingestion = AsyncMock()
     bot.pending_response_owner_count = 0
@@ -3911,7 +3929,7 @@ async def test_orchestrator_stop_retries_response_cleanup_after_late_owner_relea
 ) -> None:
     """A late response unwind finishes releases before the timeout is surfaced."""
     response_failure = ResponseShutdownTimeoutError("response still owns runtime resources")
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
     bot._quiesce_matrix_ingestion = AsyncMock()
     bot.pending_response_owner_count = 1
@@ -4079,16 +4097,13 @@ async def test_deferred_agent_stop_replaces_settled_cancelling_proof() -> None: 
     def observe_deferred_ensure(
         runner_self: ResponseRunner,
         response_task: asyncio.Task[None],
-        recovery_check: Callable[[], bool | Awaitable[bool]],
-        *,
-        retry_until_ready: bool,
+        ownership: _InboxResponseOwnership,
     ) -> asyncio.Task[bool]:
         deferred_ensure_called.set()
         return original_ensure(
             runner_self,
             response_task,
-            recovery_check,
-            retry_until_ready=retry_until_ready,
+            ownership,
         )
 
     with patch.object(
@@ -4127,7 +4142,7 @@ async def test_orchestrator_deferred_stop_keeps_journal_open_for_resistant_owner
     response_failure = ResponseShutdownTimeoutError("response still owns runtime resources")
     release_owner = asyncio.Event()
     finalizer_entered = asyncio.Event()
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
     bot._quiesce_matrix_ingestion = AsyncMock()
     bot.pending_response_owner_count = 1
@@ -4237,7 +4252,7 @@ async def test_orchestrator_retains_shared_journal_for_generic_failure_until_res
 ) -> None:
     """Live ownership, not the surfaced error type, controls shared-journal close."""
     preparation_failure = RuntimeError("preparation failed before response drain")
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
     bot._quiesce_matrix_ingestion = AsyncMock()
     bot.pending_response_owner_count = 1
@@ -4287,7 +4302,7 @@ async def test_orchestrator_stop_finishes_journal_close_after_cancellation(
     close_entered = asyncio.Event()
     release_close = asyncio.Event()
     close_completed = asyncio.Event()
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
     bot._quiesce_matrix_ingestion = AsyncMock(side_effect=quiesce_failure)
     bot.stop = AsyncMock()
@@ -4331,7 +4346,7 @@ async def test_orchestrator_stop_finishes_cleanup_after_cancellation_during_quie
     quiesce_failure = RuntimeError("source quiesce failed")
     quiesce_entered = asyncio.Event()
     release_quiesce = asyncio.Event()
-    bot = AsyncMock()
+    bot = _shutdown_bot_mock()
     bot.running = True
 
     async def hold_then_fail_quiesce() -> None:

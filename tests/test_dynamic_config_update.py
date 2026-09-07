@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 def _mock_agent_bot(config: Config, *, enable_streaming: bool = True) -> MagicMock:
     """Build a bot-shaped mock with the runtime state expected by config reloads."""
     bot = MagicMock(spec=AgentBot)
+    bot.pending_response_owner_count = 0
+    bot.pending_response_phase_counts = {}
+    bot.deferred_stop_phase = None
+    bot.deferred_stop_required = False
     bot.config = config
     bot.client = None
     bot.enable_streaming = enable_streaming

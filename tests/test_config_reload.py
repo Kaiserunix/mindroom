@@ -3426,6 +3426,10 @@ async def test_shutdown_during_active_drain_cancels_reload(
     orchestrator.running = True
 
     mock_bot = MagicMock(spec=AgentBot)
+    mock_bot.pending_response_owner_count = 0
+    mock_bot.pending_response_phase_counts = {}
+    mock_bot.deferred_stop_phase = None
+    mock_bot.deferred_stop_required = False
     mock_bot.stop = AsyncMock()
     orchestrator.agent_bots["agent1"] = mock_bot
     # An admitted response that never finishes, so the drain never goes idle.

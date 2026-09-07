@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING
@@ -231,57 +232,79 @@ async def test_batch_binding_order_and_semantic_duplicates(journal_database: Cal
         await consume_one_ingestion_batch(Session(batch), principal, account_id=ACCOUNT)
 
 
-async def receipt_sequences(store: EventJournalStore, account_id: str = ACCOUNT) -> tuple[int, ...]:
-    rows = await store.backend.read(
-        lambda transaction: transaction.fetchall(
-            "SELECT sequence FROM matrix_ingestion_receipts WHERE principal_id = ? ORDER BY sequence",
-            (account_id,),
-        ),
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duplicate", [False, True])
+async def test_duplicate_cannot_answer_a_question_published_after_source(
+    journal_database: Callable[[], EventJournalStore],
+    duplicate: bool,
+) -> None:
+    """Pending input keeps the interactive meaning it had when first admitted."""
+    store = journal_database()
+    stream = uuid4()
+    principal = store.principal("agent@@bot:example.org")
+    consumer = await principal.load_or_create_ingestion_consumer(new_generation=uuid4())
+    await principal.bind_ingestion_stream(generation=consumer.generation, stream_id=stream)
+    turn = validate_ingestion_batch(SyncBatch(stream, 1, (message("$turn"),)), account_id=ACCOUNT)
+    await principal.admit_ingestion_batch(turn)
+    answer = message("$answer")
+    answer.source["content"] = {
+        "msgtype": "m.text",
+        "body": "1",
+        "m.relates_to": {"rel_type": "m.thread", "event_id": "$thread"},
+    }
+    source = validate_ingestion_batch(SyncBatch(stream, 2, (answer,)), account_id=ACCOUNT)
+    await principal.admit_ingestion_batch(source)
+    assert await principal.claim_interactive_text(source_event_id="$answer") is None
+    question = message("$question")
+    question.source.update(
+        sender=ACCOUNT,
+        content={
+            "msgtype": "m.text",
+            "body": "Choose",
+            "m.relates_to": {"rel_type": "m.thread", "event_id": "$thread"},
+            "io.mindroom.interactive": {
+                "creator_agent": "agent",
+                "question_text": "Choose",
+                "options": {"1": "one"},
+                "option_labels": {"1": "One"},
+                "source_event_id": "$turn",
+            },
+        },
     )
-    return tuple(row["sequence"] for row in rows)
+    await principal.admit_ingestion_batch(
+        validate_ingestion_batch(SyncBatch(stream, 3, (question,)), account_id=ACCOUNT),
+    )
+    await principal.settle("$question")
+    if duplicate:
+        facts = await principal.admit_ingestion_batch(replace(source, sequence=4))
+        assert not facts.semantic_event_new
+    assert await principal.is_pending("$answer")
+    assert await principal.claim_interactive_text(source_event_id="$answer") is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_receipts", [False, True])
-async def test_batch_receipts_retain_only_latest_per_consumer(
+async def test_batch_acceptance_survives_reopen_and_is_scoped_to_consumer(
     journal_database: Callable[[], EventJournalStore],
-    legacy_receipts: bool,
 ) -> None:
-    """Empty sync completions must not accumulate receipts, including after upgrade."""
+    """Empty sync completions retain only the current replay boundary."""
     store = journal_database()
     stream = uuid4()
     principal = await principal_for(store, stream)
-    if legacy_receipts:
-
-        def seed_legacy_receipts(transaction: Transaction) -> None:
-            for sequence in (1, 2, 3):
-                transaction.execute(
-                    "INSERT INTO matrix_ingestion_receipts (principal_id, stream_id, sequence) VALUES (?, ?, ?)",
-                    (ACCOUNT, str(stream), sequence),
-                )
-            transaction.execute("UPDATE matrix_sync_consumers SET next_sequence = 4 WHERE principal_id = ?", (ACCOUNT,))
-
-        await store.backend.write(seed_legacy_receipts)
-
-    other_account = "@other:example.org"
-    other = store.principal(other_account)
+    other = store.principal("@other:example.org")
     other_stream = uuid4()
     consumer = await other.load_or_create_ingestion_consumer(new_generation=uuid4())
     await other.bind_ingestion_stream(generation=consumer.generation, stream_id=other_stream)
     other_batch = IngestionBatchAdmission(other_stream, 1, ())
     await other.admit_ingestion_batch(other_batch)
 
-    first_sequence = 4 if legacy_receipts else 1
-    for sequence in range(first_sequence, first_sequence + 3):
+    for sequence in range(1, 4):
         batch = SyncBatch(stream, sequence, (), completes_sync=True)
         result = await consume_one_ingestion_batch(Session(batch), principal, account_id=ACCOUNT)
         assert result is not None
         assert result.receipt_new
-        assert await receipt_sequences(store) == (sequence,)
-        assert await receipt_sequences(store, other_account) == (1,)
 
     reopened = journal_database().principal(ACCOUNT)
-    latest = IngestionBatchAdmission(stream, first_sequence + 2, ())
+    latest = IngestionBatchAdmission(stream, 3, ())
     assert not (await reopened.admit_ingestion_batch(latest)).receipt_new
     assert not (await other.admit_ingestion_batch(other_batch)).receipt_new
     with pytest.raises(IngestionBatchSequenceError):
@@ -289,10 +312,26 @@ async def test_batch_receipts_retain_only_latest_per_consumer(
 
 
 @pytest.mark.asyncio
-async def test_receipt_pruning_rolls_back_with_admission(
+async def test_concurrent_batch_replay_has_one_admission(
     journal_database: Callable[[], EventJournalStore],
 ) -> None:
-    """A transaction failure must preserve the previous receipt and event state."""
+    """Separate connections cannot both acquire the same batch or apply its effects."""
+    store = journal_database()
+    stream = uuid4()
+    principal = await principal_for(store, stream)
+    other_connection = journal_database().principal(ACCOUNT)
+    batch = validate_ingestion_batch(SyncBatch(stream, 1, (message("$first"),)), account_id=ACCOUNT)
+    facts = await asyncio.gather(*(owner.admit_ingestion_batch(batch) for owner in (principal, other_connection)))
+    assert sorted(fact.receipt_new for fact in facts) == [False, True]
+    assert sorted(fact.semantic_event_new for fact in facts) == [False, True]
+    assert [event.event_id for event in await principal.pending()] == ["$first"]
+
+
+@pytest.mark.asyncio
+async def test_batch_acceptance_rolls_back_with_admission(
+    journal_database: Callable[[], EventJournalStore],
+) -> None:
+    """A transaction failure must preserve the previous replay boundary and event state."""
     store = journal_database()
     stream = uuid4()
     principal = await principal_for(store, stream)
@@ -307,32 +346,10 @@ async def test_receipt_pruning_rolls_back_with_admission(
 
     with pytest.raises(RuntimeError, match="abort admission transaction"):
         await store.backend.write(fail_after_admission)
-    assert await receipt_sequences(store) == (1,)
     assert [event.event_id for event in await principal.pending()] == ["$first"]
     assert not (await principal.admit_ingestion_batch(first)).receipt_new
     assert (await principal.admit_ingestion_batch(second)).receipt_new
-    assert await receipt_sequences(store) == (2,)
     assert [event.event_id for event in await principal.pending()] == ["$first", "$second"]
-
-
-@pytest.mark.asyncio
-async def test_latest_batch_replay_requires_its_receipt(
-    journal_database: Callable[[], EventJournalStore],
-) -> None:
-    """The sequence cursor alone must not certify a replay after receipt loss."""
-    store = journal_database()
-    stream = uuid4()
-    principal = await principal_for(store, stream)
-    batch = IngestionBatchAdmission(stream, 1, ())
-    await principal.admit_ingestion_batch(batch)
-    await store.backend.write(
-        lambda transaction: transaction.execute(
-            "DELETE FROM matrix_ingestion_receipts WHERE principal_id = ?",
-            (ACCOUNT,),
-        ),
-    )
-    with pytest.raises(IngestionBatchIntegrityError):
-        await principal.admit_ingestion_batch(batch)
 
 
 @pytest.mark.asyncio
@@ -368,7 +385,6 @@ async def test_malformed_batch_has_no_pre_admission_or_journal_effects(
     assert before_effects == []
     assert session.acked == []
     assert not await principal.pending()
-    assert await receipt_sequences(store) == ()
     assert (await principal.admit_ingestion_batch(converted)).receipt_new
 
 

@@ -28,22 +28,25 @@ One shared boundary helper encodes `None` to the empty string and decodes it bac
 The Matrix client uses `nio.durable.open_durable_sync` with Classic or Simplified Sliding Sync.
 Both development and published MindRoom wheels require the released `mindroom-nio>=1.0.0,<2` package, with no Git source override.
 Account, device, consumer and stream ownership bind once when opening the session.
-The application trusts nio's typed records and does not reproduce a canonical
-JSON, digest or per-record proof protocol. Old unmerged ingestion formats are
-unsupported; ordinary existing journal and encryption data remain supported.
+Soft-logout renewal requests the existing device; it preserves the bound stream, membership positions, and attempted-delivery sending identity.
+Hard logout, missing device storage, or changed identity stops startup instead of attempting a stream replacement.
+Initial credentials are persisted after the local store exists and before journal binding, so an interrupted bind reopens the same device.
+The application trusts nio's typed records and does not reproduce a canonical JSON, digest, or per-record proof protocol.
+Pre-durable application journals and older continuity files are unsupported.
+Existing deployments use the explicit fresh-journal cutover in [the Nio 1.0 upgrade guide](../deployment/nio-upgrade.md), preserving their Matrix account, device, and encryption keys.
 
-One `SyncBatch` becomes an ordered vector of application dispositions. One
-journal transaction advances its sequence (starting at 1), applies every record,
-snapshots interactive sources and records the batch receipt. Any failure,
-including pending delivery projection, rolls back the entire vector. Redelivery
-of the last receipt performs no semantic effects. An empty completion batch
-still has a receipt and must be acknowledged.
-Only the latest receipt for each consumer is retained; successful admission prunes earlier receipts in the same transaction, and replay of earlier sequences is rejected.
+One `SyncBatch` becomes an ordered vector of application dispositions.
+One journal transaction advances the consumer's `next_sequence` (starting at 1), applies every record, and freezes interactive associations for newly admitted actionable sources.
+Any failure, including pending delivery projection, rolls back the entire vector and its sequence advance.
+The consumer sequence is the sole batch-acceptance record; no separate receipt table is needed.
+Redelivery of the last admitted sequence retries ordered hooks without repeating semantic effects.
+Earlier or skipped sequences are rejected.
+Empty completion batches advance the same sequence and must be acknowledged.
 
 Nio splits membership authorization barriers into singleton batches. The pump
 runs pre-admission hooks, commits, then runs post-admission hooks in vector order
 before acknowledging. Live membership post-hooks retry after failure even when
-the receipt already exists; recovered membership never grants new authority.
+the batch was already admitted; recovered membership never grants new authority.
 Ordinary semantic callbacks run only for newly admitted actionable events.
 Auxiliary nio callbacks and sync completion run at least once until acknowledgement
 and may repeat after a crash or callback failure.
@@ -68,17 +71,17 @@ Local membership changes use the public ordered session API and the last admitte
 Commands wait for retained producer batches to finish admission and acknowledgement before testing a no-op or selecting their expected position.
 If captured input changes that position while nio takes command ownership, the gateway reads the admitted position again and retries.
 An unobserved producer position remains unknown, so startup cleanup must issue a leave request even when nio's initial position is `leave/0`.
-The resulting local confirmation is admitted without advancing producer epoch, while fencing any previously joined journal tenure.
-Producer positions commit with the batch receipt, separately from the journal tenure that owns existing events and deliveries.
-An ordinary store adoption can therefore start the producer at epoch zero while preserving a journal's older tenure.
-The first observed departure fences any previously joined journal tenure; later departures increment journal tenure once, and rejoins retain it.
-Membership post-hooks compare producer positions so replay remains correct across adoption.
+The resulting local confirmation is admitted without advancing the producer epoch.
+Producer membership positions and application tenures commit with admitted batch progress, but have separate lifetimes.
+Application tenures belong to events and deliveries; producer positions belong to the bound nio stream.
+Reported or locally confirmed departures advance application tenure once, and rejoins retain it.
+Membership post-hooks compare admitted producer positions before applying replayed effects.
 An unsuccessful join preserves its pending invitation and decrypt fence because the producer's boolean result does not distinguish terminal rejection from stale position or exhausted HTTP retries.
 
 ### Durable admission
 
 Admission performs the journal insert or deduplication, membership-epoch validation, and the projection update in one transaction.
-The admission callback returns to nio only after that transaction commits, so a crash in the gap redelivers the event rather than losing it.
+The ingestion pump acknowledges nio only after the application transaction commits and ordered hooks finish, so a crash before acknowledgement redelivers the retained batch.
 
 If an interactive source reaches admission before an attempted outgoing edit has a durable projection, `DeliveryProjectionPendingError` rolls back admission and leaves the Nio batch unacknowledged.
 The ingestion pump waits for progress from the bot's existing outbox recovery worker, then retries that same batch against the authoritative projection barrier.
@@ -162,9 +165,9 @@ The point refetch, and nothing else.
 
 `admit_ingestion_batch()` (`event_journal/journal.py`) applies owned Nio lifecycle records and advances the epoch on a local leave or reported departure.
 
-The lifecycle effect and ingestion receipt commit atomically, so replaying an unacknowledged batch cannot advance the epoch twice.
+The lifecycle effect and admitted sequence commit atomically, so replaying an unacknowledged batch cannot advance the epoch twice.
 Nio supplies the prior and current membership epochs, while the journal rejects inconsistent transitions and absorbs already-accounted local departure echoes.
-Post-commit call and invited-room cleanup checks the current journal epoch before acting and retries unfinished effects when the receipt is replayed.
+Post-commit call and invited-room cleanup checks the current journal epoch before acting and retries unfinished effects when the batch is replayed.
 
 An epoch advance drops conversation projections, reconciles approval cards and continuations across their distinct principals, removes delivery rows proven unattempted, and retires fully acknowledged approval deliveries after tombstoning their card event IDs.
 **Attempted but unacknowledged** rows survive deliberately: their outcome is unknown, so keeping the frozen payload and its transaction ID means a retry collapses onto the same event instead of posting a second answer.
@@ -179,9 +182,8 @@ The in-flight turn is fenced at enqueue: `_enqueue_matrix_delivery` compares the
 
 ### 9. One backend, several narrow views
 
-Eleven structural protocols — ten in `event_journal/views.py` (`AdmissionView`, `ReplayView`, `DispatchView`, `PendingTurnView`, `RelationView`, `ConversationReadView`, `HistoryRecoveryRecordView`, `HydrationView`, `MatrixDeliveryView`, `ApprovalDeliveryView`) plus `MembershipView` in `event_journal/membership.py`.
-Count them rather than quoting this line; the archived plan's count named two views that no longer exist and missed one that does.
-Each collaborator takes the slice it calls, and the type checker enforces it: a hydrator reaching for `enqueue_matrix_delivery` fails `ty` before any test runs.
+Structural protocols in `event_journal/views.py` expose admission, owned-batch admission, replay, dispatch, pending turns, relation and conversation reads, history recovery, hydration, Matrix delivery, and approval delivery.
+Each collaborator takes only the slice it calls, and the type checker enforces that boundary.
 
 The generic worker accepts only `MatrixDeliveryView`, while approval collaborators accept `ApprovalDeliveryView` rather than the full principal store.
 
@@ -193,19 +195,17 @@ The generic projection was not widened for either.
 
 ### 11. Recovery classification stays in nio — scoped to the timeline
 
-Owned Classic ingestion recovers limited intervals for previously joined, hydrated rooms through Nio's normal journal and crypto path.
-MindRoom accepts its recovered lifecycle provenance and messages through the existing admission path, preserving LIVE-only reply grants.
-Context hydration remains non-actionable; it does not own another history-to-action queue.
-Nio's tracked `docs/design/classic-gap-recovery-and-capacity.md` defines the recovery bounds, restart behavior, and deliberate exclusions.
+Both Classic and Simplified Sliding Sync feed nio's owned durable ingestion session.
+Nio owns recovery bounds, cold-history classification, and explicit history-loss records.
+MindRoom maps timeline provenance directly: `HISTORY` is context-only; live and recovered records may own semantic work.
+Own-room lifecycle records carry explicit previous/current membership and producer epochs.
+Member timeline records use the same provenance-based admission as other timeline events.
+Only `LIVE` member observations update reply grants; recovered member events can retain semantic obligations without granting new authority.
+MindRoom does not infer provenance from raw sync state blocks, timeline limits, cursor presence, or repeated memberships.
 
-Timeline ingress maps nio provenance directly, with no local inference.
-It uses the specialized media parser only for encrypted media messages; every other source uses Nio's outer-event-type parser.
+The specialized media parser is used only for encrypted media messages; every other source uses nio's outer-event-type parser.
 Media-shaped extension fields on reactions or redactions cannot change their journal kind or create a message projection.
 Encrypted attachment fields and malformed-media rejection retain their existing validation path.
-`bot.py` asks `timeline_member_event_class(event)` for timeline member events and admits with the class nio gave; when that returns `None` the event is **skipped rather than guessed at**, because nio saying nothing means the event is already journaled with its true class.
-
-**State-block member events cannot consume provenance, because none exists** — `RoomInfo.state` carries no `TimelineEventProvenance`, and `record_completed_timeline_event` is called only from the timeline walk.
-So room-lifecycle state events get their own stated rule: `room_member_sync_state_plan` may consult `join_info.timeline.limited` and `prev_membership` to decide *dispatch versus baseline record*, never to label an event `LIVE`, `RECOVERED`, or `HISTORY`.
 
 ## Visible-message projection
 
@@ -326,8 +326,5 @@ The durable producer keeps one successful local membership intent until its outc
 A subsequent local command waits for that observation; shutdown may leave the acknowledged observation marker for restart.
 Nio reconciles reported echoes and owns producer membership epochs.
 
-Typed batch admission stores explicit producer membership positions separately from journal tenure.
-It must not create or consume the legacy `owed_departure_reports` counter for these records.
-Otherwise a suppressed echo leaves debt that hides the next real departure.
-Keep the legacy counter only for separate callers whose contracts still require it.
-Admission and its lifecycle effects remain in one journal transaction.
+Typed batch admission stores producer membership positions separately from application tenure in the same transaction as admitted batch progress.
+Nio owns local-command confirmation and reported echoes; MindRoom keeps no second departure-echo counter.

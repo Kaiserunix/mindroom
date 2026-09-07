@@ -20,6 +20,7 @@ import pytest
 import uvicorn
 from structlog.testing import capture_logs
 
+import mindroom.orchestrator as orchestrator_module
 import mindroom.tool_system.plugin_imports as plugin_module
 import mindroom.workers.runtime as workers_runtime_module
 from mindroom.approval_manager import (
@@ -403,6 +404,10 @@ async def test_entity_removal_keeps_bot_registered_until_cleanup_succeeds(
 
 def _bind_orderly_shutdown(bot: MagicMock) -> None:
     """Give a lightweight bot double the async shutdown protocol."""
+    bot.pending_response_owner_count = 0
+    bot.pending_response_phase_counts = {}
+    bot.deferred_stop_phase = None
+    bot.deferred_stop_required = False
     bot._quiesce_matrix_ingestion = AsyncMock()
     bot.stop = AsyncMock()
 
@@ -4995,3 +5000,51 @@ class TestMultiAgentOrchestrator:
             for bot in orchestrator.agent_bots.values():
                 if hasattr(bot, "enable_streaming"):
                     assert bot.enable_streaming is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_must_stop_startup_before_releasing_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup cannot acquire runtime resources once core teardown has begun."""
+    paths = resolve_runtime_paths(config_path=tmp_path / "config.yaml", storage_path=tmp_path / "data")
+    orchestrator = orchestrator_module._MultiAgentOrchestrator(runtime_paths=paths)
+    homeserver_wait_started = asyncio.Event()
+    homeserver_available = asyncio.Event()
+    acquired_after_teardown = []
+    teardown_started = False
+
+    async def wait_for_homeserver(**_kwargs: object) -> None:
+        homeserver_wait_started.set()
+        await homeserver_available.wait()
+
+    async def initialize() -> None:
+        # Production initialize acquires its journal and MCP manager at this seam.
+        acquired_after_teardown.append(teardown_started)
+        await asyncio.Event().wait()
+
+    async def stop() -> None:
+        nonlocal teardown_started
+        teardown_started = True
+        orchestrator._runtime_shutdown_event.set()
+        # A homeserver becoming reachable while teardown awaits another owner.
+        homeserver_available.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(orchestrator_module, "wait_for_matrix_homeserver", wait_for_homeserver)
+    monkeypatch.setattr(orchestrator, "initialize", initialize)
+    monkeypatch.setattr(orchestrator, "stop", stop)
+    startup = asyncio.create_task(orchestrator.start())
+    await homeserver_wait_started.wait()
+    finish_shutdown = orchestrator_module._finish_runtime_shutdown
+    await finish_shutdown(
+        shutdown_wait_task=None,
+        api_task=None,
+        orchestrator_task=startup,
+        auxiliary_tasks=[],
+        orchestrator=orchestrator,
+        stall_detector=None,
+    )
+    assert acquired_after_teardown == [], "Startup acquired new runtime resources after shutdown began"

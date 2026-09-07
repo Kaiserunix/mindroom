@@ -1009,3 +1009,110 @@ async def test_owned_matrix_session_factory_adopts_default_then_reopens_marked(
     finally:
         await reopened.session.close()
         await reopened.client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory permissions")
+@pytest.mark.parametrize("existing_directory", [False, True])
+async def test_owned_crypto_directory_is_private(tmp_path: Path, existing_directory: bool) -> None:
+    """An owned store must protect keys even under a permissive parent and umask."""
+    runtime_paths = RuntimePaths(
+        config_path=tmp_path / "config.yaml",
+        config_dir=tmp_path,
+        env_path=tmp_path / ".env",
+        storage_root=tmp_path / "data",
+    )
+    credentials = _owned_session.MatrixCredentials("@bot:example.org", "DEVICE", "token")
+    directory = client_session.olm_store_dir(credentials.user_id, runtime_paths)
+    if existing_directory:
+        directory.mkdir(parents=True)
+        directory.chmod(0o755)
+    store = EventJournalStore.open_sqlite(tmp_path / "journal.db")
+    opened = None
+    previous_mask = os.umask(0o022)
+    try:
+        opened = await _owned_session.open_owned_matrix_session(
+            "https://example.org",
+            credentials,
+            runtime_paths,
+            consumer_store=store.principal(credentials.user_id),
+            new_consumer_generation=UUID("22222222-2222-4222-8222-222222222222"),
+            config=DurableSyncConfig(),
+        )
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    finally:
+        os.umask(previous_mask)
+        if opened is not None:
+            await opened.session.close()
+            await opened.client.close()
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_credential_renewal_requests_the_existing_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A soft-logged-out device keeps its identity instead of getting a new stream."""
+    runtime_paths = RuntimePaths(
+        config_path=tmp_path / "config.yaml",
+        config_dir=tmp_path,
+        env_path=tmp_path / ".env",
+        storage_root=tmp_path / "data",
+    )
+    temporary = _owned_session._create_credential_client("https://example.org", runtime_paths, "@bot:example.org")
+    requested_devices = []
+
+    async def login(_password: str) -> nio.LoginResponse:
+        requested_devices.append(temporary.device_id)
+        return nio.LoginResponse("@bot:example.org", "DEVICE", "renewed-token")
+
+    monkeypatch.setattr(temporary, "login", login)
+    monkeypatch.setattr(_owned_session, "_create_credential_client", lambda *_args, **_kwargs: temporary)
+    credentials = await _owned_session.login_password_credentials(
+        "https://example.org",
+        "@bot:example.org",
+        "password",
+        runtime_paths,
+        device_id="DEVICE",
+    )
+    assert requested_devices == ["DEVICE"]
+    assert credentials.device_id == "DEVICE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("soft_logout", [False, True])
+async def test_restore_only_renews_a_soft_logged_out_device(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    soft_logout: bool,
+) -> None:
+    """A deleted server device cannot be recreated with stale published crypto state."""
+    runtime_paths = RuntimePaths(
+        config_path=tmp_path / "config.yaml",
+        config_dir=tmp_path,
+        env_path=tmp_path / ".env",
+        storage_root=tmp_path / "data",
+    )
+    temporary = _owned_session._create_credential_client("https://example.org", runtime_paths, "@bot:example.org")
+    monkeypatch.setattr(
+        temporary,
+        "whoami",
+        AsyncMock(
+            return_value=nio.WhoamiError(
+                "expired",
+                "M_UNKNOWN_TOKEN",
+                soft_logout=soft_logout,
+            ),
+        ),
+    )
+    monkeypatch.setattr(_owned_session, "_create_credential_client", lambda *_args, **_kwargs: temporary)
+    restore = _owned_session.restore_credentials(
+        "https://example.org",
+        "@bot:example.org",
+        "DEVICE",
+        "token",
+        runtime_paths,
+    )
+    if soft_logout:
+        assert await restore is None
+    else:
+        with pytest.raises(PermanentMatrixStartupError):
+            await restore

@@ -329,7 +329,7 @@ def admit_ingestion_batch(
     *,
     snapshot: Callable[[Transaction, str, InboundEvent], None],
 ) -> AdmissionFacts:
-    """Apply every disposition and its receipt in one caller-owned transaction."""
+    """Commit semantic effects and the consumer's acceptance in one transaction."""
     validate_ingestion_batch_admission(admission)
     stream = str(admission.stream_id)
     row = transaction.fetchone(
@@ -340,35 +340,20 @@ def admit_ingestion_batch(
     )
     if row is None:
         state = transaction.fetchone(
-            "SELECT c.stream_id, c.next_sequence, r.sequence AS receipt "
-            "FROM matrix_sync_consumers AS c LEFT JOIN matrix_ingestion_receipts AS r "
-            "ON r.principal_id = c.principal_id AND r.stream_id = c.stream_id AND r.sequence = ? "
-            "WHERE c.principal_id = ?",
-            (admission.sequence, principal_id),
+            "SELECT stream_id, next_sequence FROM matrix_sync_consumers WHERE principal_id = ?",
+            (principal_id,),
         )
         if state is None or state["stream_id"] != stream:
             raise IngestionConsumerBindingError
         if admission.sequence != state["next_sequence"] - 1:
             raise IngestionBatchSequenceError
-        if state["receipt"] is None:
-            raise IngestionBatchIntegrityError
         return AdmissionFacts(False, False, tuple(AdmissionFacts(False, False) for _ in admission.records))
     facts = []
     for record in admission.records:
         semantic_new = _apply_ingestion_disposition(transaction, principal_id, record)
-        if record.event is not None:
+        if semantic_new and record.event is not None:
             snapshot(transaction, principal_id, record.event)
         facts.append(AdmissionFacts(True, semantic_new))
-    transaction.execute(
-        "INSERT INTO matrix_ingestion_receipts (principal_id, stream_id, sequence) VALUES (?, ?, ?)",
-        (principal_id, stream, admission.sequence),
-    )
-    # Only the latest sequence may replay. This also prunes receipts retained
-    # by older versions when the consumer next admits a batch.
-    transaction.execute(
-        "DELETE FROM matrix_ingestion_receipts WHERE principal_id = ? AND stream_id = ? AND sequence < ?",
-        (principal_id, stream, admission.sequence),
-    )
     return AdmissionFacts(True, any(f.semantic_event_new for f in facts), tuple(facts))
 
 

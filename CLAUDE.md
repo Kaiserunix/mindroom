@@ -61,7 +61,7 @@ Gemini API docs call `gemini-3.1-flash-image` Nano Banana 2, while Vertex AI doc
 
 ```text
 Matrix sync callback
-  -> matrix/durable_ingestion.py                           (validate owned Nio work, commit its receipt and effects, then acknowledge)
+  -> matrix/durable_ingestion.py                           (validate owned Nio work, commit its sequence and effects, then acknowledge)
   -> bot.py (AgentBot/TeamBot runtime shell)
   -> journal_dispatch.py + pending_event_worker.py         (fan admitted events out to callbacks; unsettled work is woken again)
   -> turn_controller.py (owns one turn: precheck -> normalize -> resolve -> coalesce -> decide -> execute -> record)
