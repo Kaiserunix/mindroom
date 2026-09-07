@@ -40,8 +40,9 @@ DURABLE_DELIVERY_ID_KEY = "io.mindroom.delivery_id"
 class EventClass(StrEnum):
     """Whether an admitted event may start semantic work.
 
-    Derived once, at admission, from nio's per-event provenance. MindRoom never
-    recomputes it from cursors, timestamps, or pagination shapes.
+    Timeline classes come from nio's per-event provenance at admission;
+    membership state snapshots are always context-only. MindRoom never
+    recomputes actionability from cursors, timestamps, or pagination shapes.
     """
 
     ACTIONABLE = "actionable"

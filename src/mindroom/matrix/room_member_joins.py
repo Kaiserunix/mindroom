@@ -6,21 +6,23 @@ import asyncio
 import json
 from dataclasses import dataclass
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from weakref import WeakValueDictionary
 
 from mindroom.durable_write import write_json_file_durable
+from mindroom.event_journal import EventKind
 from mindroom.logging_config import get_logger
 from mindroom.requester_identity import is_human_requester_id
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Awaitable, Callable, Iterable, Mapping
     from pathlib import Path
 
     import nio
 
     from mindroom.config.main import Config
     from mindroom.constants import RuntimePaths
+    from mindroom.event_journal import DispatchView
 
 logger = get_logger(__name__)
 _ROOM_MEMBER_JOIN_LOCKS: WeakValueDictionary[Path, Lock] = WeakValueDictionary()
@@ -241,6 +243,40 @@ def _record_room_member_join_seen(
 ) -> None:
     """Record one room/user join after its hook emission completes."""
     _mark_room_member_joins_seen(storage_root, ((join.room_id, join.user_id),))
+
+
+async def record_room_member_baseline(
+    room_id: str,
+    event: nio.RoomMemberEvent,
+    *,
+    config: Config,
+    runtime_paths: RuntimePaths,
+    store: DispatchView,
+    lock: asyncio.Lock,
+) -> None:
+    """Remember historical members without completing a live hook the journal still owes."""
+    user_id = _human_join_user_id(event, config=config, runtime_paths=runtime_paths)
+    if user_id is None:
+        return
+    async with lock:
+        after = None
+        while True:
+            pending = await store.pending_of_kind(EventKind.ROOM_LIFECYCLE, after_receipt_order=after)
+            if pending.unreadable_rows:
+                message = "Cannot record membership baseline while pending membership hooks are unreadable"
+                raise RuntimeError(message)
+            for item in pending:
+                content = cast("Mapping[str, object]", item.source["content"])
+                if (
+                    item.room_id == room_id
+                    and item.source.get("state_key") == user_id
+                    and content.get("membership") == "join"
+                ):
+                    return
+            if pending.reached_end:
+                break
+            after = pending.resume_after
+        await asyncio.to_thread(_mark_room_member_joins_seen, runtime_paths.storage_root, ((room_id, user_id),))
 
 
 async def emit_room_member_join_at_least_once(

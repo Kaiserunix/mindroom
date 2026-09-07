@@ -66,17 +66,20 @@ def _record_disposition(
         return ej.IngestionRecordAdmission(ej.IngestionRecordDisposition.ROOM_LIFECYCLE)
     if record.kind is RecordKind.LOSS:
         return ej.IngestionRecordAdmission(ej.IngestionRecordDisposition.HISTORY_LOSS, room_id=record.room_id)
-    if record.kind is RecordKind.TIMELINE:
+    member_snapshot = record.kind is RecordKind.STATE and record.source.get("type") == "m.room.member"
+    if record.kind is RecordKind.TIMELINE or member_snapshot:
         source = record.clear if record.clear is not None else record.source
         if not is_transport_progress_source(source, self_sender=account_id):
-            if record.room_id is None or record.provenance is None:
+            # State snapshots only seed baselines; they never authorize callbacks.
+            provenance = nio.TimelineEventProvenance.HISTORY if member_snapshot else record.provenance
+            if record.room_id is None or provenance is None:
                 message = "Timeline observation lacks room or provenance"
                 raise ej.IngestionBatchValidationError(message)
             views = ingestion_timeline_views(
                 room_id=record.room_id,
                 source=source,
                 self_sender=account_id,
-                provenance=record.provenance,
+                provenance=provenance,
                 schedule_trigger_sender_is_managed=schedule_trigger_sender_is_managed,
                 security_metadata=(
                     {

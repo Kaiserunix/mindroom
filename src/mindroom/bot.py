@@ -98,6 +98,7 @@ from .dispatch_callback_outcome import TurnDispatchOutcome
 from .edit_regenerator import EditRegenerator, EditRegeneratorDeps
 from .entity_rooms import get_rooms_for_entity
 from .event_journal import (
+    EventClass,
     EventJournalStore,
     EventKind,
     PrincipalStore,
@@ -122,6 +123,7 @@ from .matrix.room_member_joins import (
     RoomMemberJoin,
     RoomMemberLeave,
     emit_room_member_join_at_least_once,
+    record_room_member_baseline,
     room_member_left_from_event,
 )
 from .matrix.to_device import AuthenticatedToDeviceEvent
@@ -1586,10 +1588,20 @@ class AgentBot:
         }
         if facts.receipt_new and (admission.projected is not None or member_activity):
             self._room_activity_observer(event.room_id)
-        if live_member:
+        if event.kind is EventKind.ROOM_LIFECYCLE:
             parsed = nio.RoomMemberEvent.from_dict(dict(event.source))
             assert isinstance(parsed, nio.RoomMemberEvent)
-            await self._apply_live_reply_membership_transition(event.room_id, parsed)
+            if live_member:
+                await self._apply_live_reply_membership_transition(event.room_id, parsed)
+            elif self.agent_name == ROUTER_AGENT_NAME and event.event_class is EventClass.CONTEXT_ONLY:
+                await record_room_member_baseline(
+                    event.room_id,
+                    parsed,
+                    config=self.config,
+                    runtime_paths=self.runtime_paths,
+                    store=self.journal_principal(),
+                    lock=self._room_member_join_lock,
+                )
 
     async def _apply_ingestion_membership(self, admission: IngestionRecordAdmission) -> None:
         """Reconcile app state only while this admitted membership is still current."""

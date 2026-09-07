@@ -235,15 +235,15 @@ async def test_export_threads_once_room_filter_selects_invited_room(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_an_unassignable_account_group_fails_only_the_targets_that_wanted_it(tmp_path: Path) -> None:
-    """A room no account can reach fails the targets that requested it and no others."""
+async def test_an_unavailable_owner_fails_only_the_targets_that_wanted_it(tmp_path: Path) -> None:
+    """An unavailable room owner fails the targets that requested it and no others."""
     config = thread_export_config(tmp_path)
     runtime_paths = runtime_paths_for(config)
     write_thread_export_matrix_state(tmp_path, account_keys=(INTERNAL_USER_ACCOUNT_KEY,))
     write_invited_rooms(runtime_paths, "general", ["!user-room:localhost"])
 
     stats = await export_threads_to_targets_once(
-        source_provider=_source_for_group,
+        source_provider=Mock(side_effect=RuntimeError("owner unavailable")),
         config=config,
         runtime_paths=runtime_paths,
         targets=(
@@ -255,6 +255,7 @@ async def test_an_unassignable_account_group_fails_only_the_targets_that_wanted_
 
     assert stats[0].failures == 1
     assert stats[0].failed_items[0].room_id == "!user-room:localhost"
+    assert "owner unavailable" in stats[0].failed_items[0].error
     assert stats[1].failures == 0
 
 
