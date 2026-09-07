@@ -29,7 +29,6 @@ from mindroom.dispatch_recovery_context import turn_dispatch_recovery_scope
 from mindroom.dispatch_source import SILENT_SCHEDULE_SOURCE_KIND
 from mindroom.event_journal import (
     TURN_BACKED_KINDS,
-    AdmissionResult,
     EventKind,
     SemanticConsumer,
 )
@@ -37,9 +36,7 @@ from mindroom.logging_config import get_logger
 from mindroom.matrix.journal_ingress import (
     TEXTUAL_MESSAGE_EVENT_TYPE,
     JournalCorruptionError,
-    inbound_event,
     parse_journal_event,
-    projected_event,
 )
 from mindroom.matrix.media import MATRIX_MEDIA_EVENT_TYPES, MatrixMediaEvent
 from mindroom.pending_event_worker import PendingEventWorker
@@ -47,7 +44,7 @@ from mindroom.pending_event_worker import PendingEventWorker
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from mindroom.event_journal import DispatchView, EventClass, InteractiveSelection
+    from mindroom.event_journal import DispatchView, InteractiveSelection
 
 from mindroom.event_journal import JournalEvent
 
@@ -57,10 +54,6 @@ logger = get_logger(__name__)
 # it to claim a consumer or read their receipt order without every one of them
 # having to thread the event through its own signature.
 _RUNNING_EVENT: ContextVar[JournalEvent | None] = ContextVar("running_journal_event", default=None)
-
-# How many unsettled lifecycle events one read of the identity walk covers. The
-# walk continues past it; this only bounds how much is held at once.
-_LIFECYCLE_PAGE_SIZE = 256
 
 
 def _needs_turn_replay(event: JournalEvent) -> bool:
@@ -103,59 +96,27 @@ class JournalDispatcher:
     """Admit Matrix events durably, then run their callbacks from the journal."""
 
     store: DispatchView
-    # This bot's raw Matrix user ID, threaded through to admission so its own
-    # streaming progress edits are recognized as transport and left out of the
-    # conversation projection.
-    self_sender: str
     callbacks: JournalCallbacks
     room_for_id: Callable[[str], nio.MatrixRoom]
     schedule_trigger_sender_is_managed: Callable[[str], bool] = lambda _sender: False
-    on_persist_failure: Callable[[], None] | None = None
     runtime_generation: str = "unmanaged"
     # Replaying a turn needs the agent fleet up, so the orchestrator releases
     # turn-backed replay separately from the rest of startup. Until it does,
     # those events stay pending; everything else drains immediately.
     _turn_replay_released: bool = field(default=False, init=False, repr=False)
     _worker: PendingEventWorker = field(init=False, repr=False)
-    # The event objects nio already parsed, kept until their callback runs.
-    # Replaying from the stored payload is what recovery is for; doing it for
-    # an event that is still in hand would parse every event twice and discard
-    # the decryption state nio attached to the original.
-    _live_events: dict[str, tuple[nio.MatrixRoom, nio.Event]] = field(default_factory=dict, init=False, repr=False)
     # Reactions normally complete inline. Only one whose callback explicitly
     # deferred has a managed response owner worth probing on later scans.
     _deferred_reaction_ids: set[str] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        """Build the worker and admission adapter this dispatcher owns."""
+        """Build the worker this dispatcher owns."""
         self._worker = PendingEventWorker(
             store=self.store,
             handle=self._run_event,
             runtime_generation=self.runtime_generation,
             deferral_is_live=self._deferral_is_live,
-            retained_event_ids=self._retained_live_event_ids,
-            release_retained=self._forget_live_events,
         )
-
-    def _remember_live_event(self, room: nio.MatrixRoom, event: nio.Event) -> None:
-        """Keep the room and event nio already produced, for their callback."""
-        self._live_events[event.event_id] = (room, event)
-
-    def _retained_live_event_ids(self) -> frozenset[str]:
-        """Return the events whose parsed objects are still waiting for a run."""
-        return frozenset(self._live_events)
-
-    def _forget_live_events(self, event_ids: frozenset[str]) -> None:
-        """Drop parsed objects for rows the worker proved no run can reach.
-
-        Taking the object out is the last thing a run does, so a row that
-        settles without one leaves it here forever. A membership fence is
-        exactly that: it settles the turn-backed work the departure has made
-        unanswerable, and the worker never sees the row again. What is left
-        behind is a room, an event, and the message text inside it.
-        """
-        for event_id in event_ids:
-            self._live_events.pop(event_id, None)
 
     def start(self) -> None:
         """Begin draining everything that does not need the agent fleet."""
@@ -192,80 +153,6 @@ class JournalDispatcher:
         self._turn_replay_released = True
         return await self._worker.drain_once()
 
-    async def admit_out_of_band(
-        self,
-        room: nio.MatrixRoom,
-        event: nio.Event,
-        kind: EventKind,
-        event_class: EventClass,
-        *,
-        live: bool = True,
-    ) -> None:
-        """Admit an event that does not arrive through timeline admission.
-
-        Room-membership events are only owned once the router is ready for
-        them, which is a decision the timeline callback cannot make.
-
-        ``live=False`` admits the event without handing its parsed object to
-        the callback, so the worker treats it as a replay. That is what a
-        caller wants when it is recording work for a later process to run
-        rather than delivering something that just happened.
-        """
-        try:
-            admission = await self.store.admit(
-                inbound_event(room.room_id, event, kind, event_class),
-                projected_event(room.room_id, event, kind, self_sender=self.self_sender),
-            )
-        except Exception:
-            if self.on_persist_failure is not None:
-                self.on_persist_failure()
-            raise
-        if live and admission is AdmissionResult.ADMITTED:
-            # Only an event this admission created can still owe the run that
-            # takes the parsed object back out again.
-            self._remember_live_event(room, event)
-        self._worker.wake()
-
-    async def _admit_and_run(
-        self,
-        room: nio.MatrixRoom,
-        event: nio.Event,
-        kind: EventKind,
-        event_class: EventClass,
-    ) -> None:
-        """Admit one out-of-band event and run its callback before returning.
-
-        Membership hooks are ordered against the sync response that produced
-        them, so their callback has to finish inside that response rather than
-        whenever the worker next looks.
-
-        Running it here does not exempt it from having one handler. Admission
-        wakes the pump, two awaits separate that wake from the callback, and
-        an event stays pending for as long as its handler runs -- so a scan in
-        that window collects the event this is already running and dispatches
-        it into the room's lane. Claiming it as this caller's sole handler is
-        what closes that, and the claim is taken before admission because a
-        scan can only collect a row that has committed.
-
-        Draining through the room's lane, the way recovery does, is the wrong
-        answer for this one. This runs on the sync task, and a lane can hold a
-        message handler blocked on another turn settling -- which in turn can
-        be waiting days for a tool-approval decision that only a live sync can
-        deliver. Waiting for the lane here would trade a duplicate dispatch
-        for a bot that receives nothing at all.
-        """
-        with self._worker.sole_handler(event.event_id):
-            await self.admit_out_of_band(room, event, kind, event_class)
-            stored = await self.store.load_event(event.event_id)
-            if stored is None or not await self.store.is_pending(event.event_id):
-                # A context-only event is admitted already settled, so no
-                # callback will ever run for it. Keeping the parsed object
-                # would hold it for a run that cannot come.
-                self._live_events.pop(event.event_id, None)
-                return
-            if await self._run_event(stored):
-                await self.store.settle(event.event_id)
-
     def _has_live_owner(self, event_id: str) -> bool:
         """Return whether something in this process is already holding one source.
 
@@ -293,7 +180,7 @@ class JournalDispatcher:
             # A completing callback settles or raises. It never defers, so a
             # deferral for one of these kinds cannot exist to begin with.
             return True
-        if needs_turn_replay and not self._turn_replay_released and event.event_id not in self._live_events:
+        if needs_turn_replay and not self._turn_replay_released:
             # Replay is parked on the fleet, and it is released by draining
             # rather than by calling back, so nothing here has died.
             return True
@@ -315,10 +202,8 @@ class JournalDispatcher:
         can be terminal with nothing durable behind it.
         """
         needs_turn_replay = _needs_turn_replay(event)
-        if needs_turn_replay and not self._turn_replay_released and event.event_id not in self._live_events:
-            # A turn replayed from a previous process needs responders that may
-            # not exist yet. Live events are unaffected: their responders are
-            # whatever is running now.
+        if needs_turn_replay and not self._turn_replay_released:
+            # Turn work waits until the orchestrator has started responders.
             return False
         has_deferrable_owner = needs_turn_replay or event.event_id in self._deferred_reaction_ids
         if has_deferrable_owner and self._has_live_owner(event.event_id):
@@ -334,30 +219,19 @@ class JournalDispatcher:
             # its source through ingress again would rerun hooks and current
             # routing policy, either duplicating side effects or settling the
             # source before the continuation can resume.
-            self._live_events.pop(event.event_id, None)
             return approval_settled
-        live = self._live_events.pop(event.event_id, None)
-        # An event the journal loaded rather than nio just delivered is a
-        # replay. Turn work behaves differently there: it defers silently
-        # instead of telling the user an agent is still starting, because that
-        # notice was already sent — or the conversation has moved on — by the
-        # time a replay runs.
-        replaying = live is None
-        room, matrix_event = live if live is not None else (None, None)
-        if matrix_event is None:
-            try:
-                matrix_event = parse_journal_event(event)
-            except JournalCorruptionError:
-                logger.exception(
-                    "journal_event_unreplayable",
-                    event_id=event.event_id,
-                    kind=event.kind.value,
-                    room_id=event.room_id,
-                )
-                return True
-        if room is None:
-            room = self.room_for_id(event.room_id)
-        with turn_dispatch_recovery_scope(active=replaying and needs_turn_replay):
+        try:
+            matrix_event = parse_journal_event(event)
+        except JournalCorruptionError:
+            logger.exception(
+                "journal_event_unreplayable",
+                event_id=event.event_id,
+                kind=event.kind.value,
+                room_id=event.room_id,
+            )
+            return True
+        room = self.room_for_id(event.room_id)
+        with turn_dispatch_recovery_scope(active=needs_turn_replay):
             return await self._invoke(event, room, matrix_event)
 
     async def _invoke(
@@ -495,46 +369,6 @@ class JournalDispatcher:
     async def unsettled_event_ids(self) -> frozenset[str]:
         """Return every event that still owes semantic work."""
         return await self.store.unsettled_event_ids()
-
-    async def _unsettled_room_lifecycle_member_ids(self) -> frozenset[tuple[str, str]]:
-        """Return room and member identities still owned by lifecycle events.
-
-        Every one of them, walked to the end rather than read as one page. The
-        caller records the joins this set does not cover as already seen, so an
-        identity left out because a page filled up is a join hook that never
-        runs and nothing ever asks about again.
-
-        A row the store could not read is that same hole arriving by a
-        different route, and it is the more dangerous one because the walk
-        would finish cleanly around it. There is no partial answer to give
-        here: the one thing this set is used for is deciding what may be
-        written off, so a walk that skipped a row refuses rather than
-        under-reporting. A lifecycle row whose payload is not a member event
-        already fails the same way two lines down.
-        """
-        members: set[tuple[str, str]] = set()
-        cursor: int | None = None
-        while True:
-            page = await self.store.pending_of_kind(
-                EventKind.ROOM_LIFECYCLE,
-                limit=_LIFECYCLE_PAGE_SIZE,
-                after_receipt_order=cursor,
-            )
-            if page.unreadable_rows:
-                msg = (
-                    f"{page.unreadable_rows} unsettled room lifecycle row(s) could not be read, "
-                    "so the identities still owing a hook cannot be enumerated"
-                )
-                raise JournalCorruptionError(msg)
-            for event in page:
-                parsed = parse_journal_event(event)
-                if not isinstance(parsed, nio.RoomMemberEvent):
-                    msg = f"Room lifecycle event {event.event_id!r} is not a member event"
-                    raise JournalCorruptionError(msg)
-                members.add((event.room_id, parsed.state_key))
-            if page.reached_end:
-                return frozenset(members)
-            cursor = page.resume_after
 
 
 @dataclass(frozen=True, slots=True)

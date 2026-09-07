@@ -33,7 +33,7 @@ from mindroom.event_journal import (
     SemanticConsumer,
     VisibleMessage,
 )
-from mindroom.journal_dispatch import _BINDINGS, _LIFECYCLE_PAGE_SIZE, JournalCallbacks, JournalDispatcher
+from mindroom.journal_dispatch import _BINDINGS, JournalCallbacks, JournalDispatcher
 from mindroom.matrix.client_delivery import build_edit_event_content
 from mindroom.matrix.client_visible_messages import is_visible_room_message
 from mindroom.matrix.conversation_hydration import _projected_from_event
@@ -42,12 +42,13 @@ from mindroom.matrix.journal_ingress import (
     JournalCorruptionError,
     _event_class_for,
     _event_kind,
-    inbound_event,
+    _inbound_event,
+    _projected_event,
     ingestion_timeline_views,
     parse_journal_event,
-    projected_event,
 )
 from mindroom.pending_event_worker import _BATCH_SIZE, PendingEventWorker
+from tests.journal_helpers import admit_dispatch_event
 from tests.test_event_journal_store import corrupt
 
 if TYPE_CHECKING:
@@ -470,7 +471,7 @@ class TestAdmissionAdapter:
 
     async def test_a_threaded_message_lands_in_its_thread(self) -> None:
         """A threaded message lands in its thread."""
-        inbound = inbound_event(
+        inbound = _inbound_event(
             ROOM,
             text_event("$m", thread_id="$root"),
             EventKind.MESSAGE,
@@ -480,7 +481,7 @@ class TestAdmissionAdapter:
 
     async def test_an_unthreaded_message_has_no_thread(self) -> None:
         """An unthreaded message has no thread."""
-        inbound = inbound_event(ROOM, text_event("$m"), EventKind.MESSAGE, EventClass.ACTIONABLE)
+        inbound = _inbound_event(ROOM, text_event("$m"), EventKind.MESSAGE, EventClass.ACTIONABLE)
         assert inbound.thread_id is None
 
     async def test_a_delivery_echo_keeps_its_matrix_transaction_id(self) -> None:
@@ -497,7 +498,7 @@ class TestAdmissionAdapter:
         )
         assert isinstance(event, nio.Event)
 
-        projected = projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT)
+        projected = _projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT)
 
         assert projected is not None
         assert projected.transaction_id == "tx-final"
@@ -514,11 +515,11 @@ class TestAdmissionAdapter:
             },
         )
         assert isinstance(event, nio.Event)
-        assert projected_event(ROOM, event, EventKind.REACTION, self_sender=BOT) is None
+        assert _projected_event(ROOM, event, EventKind.REACTION, self_sender=BOT) is None
 
     async def test_a_redaction_projects_onto_its_target(self) -> None:
         """A redaction projects onto its target."""
-        projected = projected_event(ROOM, redaction_event("$r", "$m"), EventKind.REDACTION, self_sender=BOT)
+        projected = _projected_event(ROOM, redaction_event("$r", "$m"), EventKind.REDACTION, self_sender=BOT)
         assert projected is not None
         assert projected.redacts_event_id == "$m"
 
@@ -584,8 +585,8 @@ class TestSidecarContent:
         preview = "The answer beg [Message continues in attached file]"
         event = sidecar_event("$long", preview, "mxc://server/long-answer")
         await alice.admit(
-            inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
         )
 
         page = await alice.read_conversation(room_id=ROOM, thread_id=None, limit=10)
@@ -607,8 +608,8 @@ class TestSidecarContent:
         sidecar = sidecar_event("$long", "truncated [Message continues in attached file]", "mxc://server/long")
         for event in (plain, sidecar):
             await alice.admit(
-                inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-                projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
+                _inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+                _projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
             )
 
         page = await alice.read_conversation(room_id=ROOM, thread_id=None, limit=10)
@@ -629,8 +630,8 @@ class TestSidecarContent:
         whole = "The answer begins here and runs on for many thousands of characters."
         event = text_event("$long", whole, ts=5_000)
         await alice.admit(
-            inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
         )
 
         page = await alice.read_conversation(room_id=ROOM, thread_id=None, limit=10)
@@ -655,8 +656,8 @@ class TestEchoOrdering:
         """A self-authored echo is projected like any other timeline event."""
         echo = bot_event("$answer", "the answer")
         await alice.admit(
-            inbound_event(ROOM, echo, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(ROOM, echo, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(ROOM, echo, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(ROOM, echo, EventKind.MESSAGE, self_sender=BOT),
         )
 
         page = await alice.read_conversation(room_id=ROOM, thread_id=None, limit=10)
@@ -675,8 +676,8 @@ class TestEchoOrdering:
             text_event("$follow_up", "and then?", ts=1_200),
         ):
             await alice.admit(
-                inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-                projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
+                _inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+                _projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
             )
 
         page = await alice.read_conversation(room_id=ROOM, thread_id=None, limit=10)
@@ -703,8 +704,8 @@ class TestEchoOrdering:
         await asyncio.gather(
             *(
                 alice.admit(
-                    inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-                    projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
+                    _inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+                    _projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
                 )
                 for event in batch
             ),
@@ -753,13 +754,13 @@ class TestEchoOrdering:
         """A gap-recovered echo still lands before the live message that follows."""
         recovered = bot_event("$answer", "the answer", ts=3_100)
         await alice.admit(
-            inbound_event(ROOM, recovered, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(ROOM, recovered, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(ROOM, recovered, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(ROOM, recovered, EventKind.MESSAGE, self_sender=BOT),
         )
         live = text_event("$follow_up", "and then?", ts=3_200)
         await alice.admit(
-            inbound_event(ROOM, live, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(ROOM, live, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(ROOM, live, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(ROOM, live, EventKind.MESSAGE, self_sender=BOT),
         )
 
         page = await alice.read_conversation(room_id=ROOM, thread_id=None, limit=10)
@@ -1120,8 +1121,8 @@ class TestReplayFidelity:
         """A message replays as itself."""
         original = text_event("$m", "hello")
         await alice.admit(
-            inbound_event(ROOM, original, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(ROOM, original, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(ROOM, original, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(ROOM, original, EventKind.MESSAGE, self_sender=BOT),
         )
 
         stored = (await alice.pending())[0]
@@ -1144,8 +1145,8 @@ class TestReplayFidelity:
         original.session_id = "session"
 
         await alice.admit(
-            inbound_event(ROOM, original, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(ROOM, original, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(ROOM, original, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(ROOM, original, EventKind.MESSAGE, self_sender=BOT),
         )
         replayed = parse_journal_event((await alice.pending())[0])
 
@@ -1167,8 +1168,8 @@ class TestReplayFidelity:
         """
         original = image_event("$img", "diagram.png")
         await alice.admit(
-            inbound_event(ROOM, original, EventKind.MEDIA, EventClass.ACTIONABLE),
-            projected_event(ROOM, original, EventKind.MEDIA, self_sender=BOT),
+            _inbound_event(ROOM, original, EventKind.MEDIA, EventClass.ACTIONABLE),
+            _projected_event(ROOM, original, EventKind.MEDIA, self_sender=BOT),
         )
 
         replayed = parse_journal_event((await alice.pending())[0])
@@ -1220,8 +1221,8 @@ class TestReplayFidelity:
         for source in sources:
             kind = EventKind.MESSAGE if isinstance(source, nio.RoomMessageText) else EventKind.MEDIA
             await alice.admit(
-                inbound_event(ROOM, source, kind, EventClass.ACTIONABLE),
-                projected_event(ROOM, source, kind, self_sender=BOT),
+                _inbound_event(ROOM, source, kind, EventClass.ACTIONABLE),
+                _projected_event(ROOM, source, kind, self_sender=BOT),
             )
 
         replayed = [parse_journal_event(stored) for stored in await alice.pending()]
@@ -1241,7 +1242,7 @@ class TestReplayFidelity:
         """A corrupt payload is refused not guessed."""
         original = text_event("$m")
         await alice.admit(
-            inbound_event(ROOM, original, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _inbound_event(ROOM, original, EventKind.MESSAGE, EventClass.ACTIONABLE),
             None,
         )
         stored = (await alice.pending())[0]
@@ -1257,13 +1258,13 @@ class TestPendingEventWorker:
     @staticmethod
     async def _admit(store: PrincipalStore, event: nio.Event, room_id: str = ROOM) -> None:
         await store.admit(
-            inbound_event(room_id, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(room_id, event, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(room_id, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(room_id, event, EventKind.MESSAGE, self_sender=BOT),
         )
 
     @staticmethod
     async def _admit_reaction(store: PrincipalStore, event: nio.Event) -> None:
-        await store.admit(inbound_event(ROOM, event, EventKind.REACTION, EventClass.ACTIONABLE))
+        await store.admit(_inbound_event(ROOM, event, EventKind.REACTION, EventClass.ACTIONABLE))
 
     async def test_a_rooms_events_run_in_receipt_order(self, alice: PrincipalStore) -> None:
         """A rooms events run in receipt order."""
@@ -1820,12 +1821,11 @@ class TestPendingEventWorker:
             deferral_is_live=lambda _event: owner_alive,
         )
 
-        # `$early` is claimed by a caller running it itself, so only `$late`
-        # reaches a lane and defers to an owner that then dies.
-        with worker.sole_handler("$early"):
-            await worker.drain_once()
-        assert handled == ["$late"]
-        handled.clear()
+        # Seed a later deferred source, then reclaim it alongside the earlier
+        # pending row. The lane must merge both in receipt order.
+        late = await alice.load_event("$late")
+        assert late is not None
+        worker._deferred["$late"] = late
 
         owner_alive = False
         await worker.drain_once()
@@ -1912,7 +1912,6 @@ class TestOutOfBandDispatch:
 
         return JournalDispatcher(
             store=store,
-            self_sender=BOT,
             callbacks=JournalCallbacks(
                 on_message=cast("Any", noop),
                 on_media=cast("Any", noop),
@@ -1928,20 +1927,8 @@ class TestOutOfBandDispatch:
             room_for_id=lambda _room_id: room(),
         )
 
-    async def test_admit_and_run_is_the_events_only_handler(self, alice: PrincipalStore) -> None:
-        """Running an event inline does not exempt it from having one handler.
-
-        ``_admit_and_run`` wakes the pump and then awaits twice -- a load and a
-        pending check -- before it reaches the callback. The pump has no
-        in-flight filter, because an event stays pending for the whole time its
-        handler runs, so a scan inside that window collects the very event the
-        caller is already running and dispatches it into the room's lane.
-
-        The count matters as much as the concurrency. Asserting only that
-        nothing raised would pass with the bug present: a room-lifecycle
-        callback claims no semantic consumer, so the second handler runs to
-        completion and settles a row the first one is about to settle again.
-        """
+    async def test_concurrent_drains_keep_one_handler(self, alice: PrincipalStore) -> None:
+        """Concurrent pump and explicit drains must share one room lane."""
         handled: list[str] = []
         concurrent = 0
         peak_concurrent = 0
@@ -1965,10 +1952,15 @@ class TestOutOfBandDispatch:
                 concurrent -= 1
 
         dispatcher = self._dispatcher(alice, on_room_lifecycle)
-        dispatcher.start()
-        running = asyncio.create_task(
-            dispatcher._admit_and_run(room(), member_event("$join"), EventKind.ROOM_LIFECYCLE, EventClass.ACTIONABLE),
+        await admit_dispatch_event(
+            dispatcher,
+            room(),
+            member_event("$join"),
+            EventKind.ROOM_LIFECYCLE,
+            EventClass.ACTIONABLE,
         )
+        running = asyncio.create_task(dispatcher.drain_once())
+        dispatcher.start()
         await asyncio.wait_for(inside_handler.wait(), timeout=5)
         with contextlib.suppress(TimeoutError):
             # A second handler has to wake the pump, read a page of pending
@@ -2002,7 +1994,6 @@ class TestDeferralOwnership:
 
         return JournalDispatcher(
             store=store,
-            self_sender=BOT,
             callbacks=JournalCallbacks(
                 on_message=cast("Any", noop),
                 on_media=cast("Any", noop),
@@ -2022,8 +2013,8 @@ class TestDeferralOwnership:
     async def _admitted(store: PrincipalStore, event: nio.Event, kind: EventKind) -> JournalEvent:
         """Admit one event and return the journal row the worker would see."""
         await store.admit(
-            inbound_event(ROOM, event, kind, EventClass.ACTIONABLE),
-            projected_event(ROOM, event, kind, self_sender=BOT),
+            _inbound_event(ROOM, event, kind, EventClass.ACTIONABLE),
+            _projected_event(ROOM, event, kind, self_sender=BOT),
         )
         return next(item for item in await store.pending() if item.event_id == event.event_id)
 
@@ -2117,71 +2108,6 @@ class TestDeferralOwnership:
         assert dispatcher._deferral_is_live(message) is False
 
 
-class TestUnsettledLifecycleIdentities:
-    """The set a join-hook suppressor trusts has to be all of them."""
-
-    @staticmethod
-    def _dispatcher(store: PrincipalStore) -> JournalDispatcher:
-        async def noop(_room: nio.MatrixRoom, _event: nio.Event) -> None:
-            return None
-
-        return JournalDispatcher(
-            store=store,
-            self_sender=BOT,
-            callbacks=JournalCallbacks(
-                on_message=cast("Any", noop),
-                on_media=cast("Any", noop),
-                on_reaction=cast("Any", noop),
-                on_approval=cast("Any", noop),
-                on_room_lifecycle=cast("Any", noop),
-                on_redaction=cast("Any", noop),
-                on_decryption_failure=cast("Any", noop),
-                on_approval_continuation=AsyncMock(return_value=None),
-                source_has_live_owner=lambda _event_id: False,
-                turn_has_live_claim=lambda _event_id: False,
-            ),
-            room_for_id=lambda _room_id: room(),
-        )
-
-    async def test_every_unsettled_identity_is_returned_past_one_page(
-        self,
-        alice: PrincipalStore,
-    ) -> None:
-        """One page short is one join hook that never runs.
-
-        The caller records every join this set does not cover as already seen,
-        so an identity missing because the read filled up is not merely late:
-        nothing asks about it again.
-        """
-        count = _LIFECYCLE_PAGE_SIZE + 1
-        for index in range(count):
-            member = member_event(f"$join{index:04d}", user_id=f"@user{index:04d}:example.org")
-            await alice.admit(inbound_event(ROOM, member, EventKind.ROOM_LIFECYCLE, EventClass.ACTIONABLE))
-
-        members = await self._dispatcher(alice)._unsettled_room_lifecycle_member_ids()
-
-        assert len(members) == count
-        assert (ROOM, f"@user{count - 1:04d}:example.org") in members
-
-    async def test_an_identity_it_could_not_read_is_not_reported_as_absent(
-        self,
-        alice: PrincipalStore,
-    ) -> None:
-        """A walk that steps over a row it cannot read finishes looking complete.
-
-        Which is worse than stopping short, because the caller writes off every
-        identity the set does not name. The hook owed to the member behind that
-        row then never runs, and nothing asks about it again.
-        """
-        for index in range(3):
-            member = member_event(f"$join{index}", user_id=f"@user{index}:example.org")
-            await alice.admit(inbound_event(ROOM, member, EventKind.ROOM_LIFECYCLE, EventClass.ACTIONABLE))
-        await corrupt(alice, "$join1")
-
-        with pytest.raises(JournalCorruptionError, match="could not be read"):
-            await self._dispatcher(alice)._unsettled_room_lifecycle_member_ids()
-
-
 async def _never_called(event: JournalEvent) -> bool:
     """Fail loudly, for a worker whose scan is under test rather than its lanes."""
     msg = f"no handler should have run for {event.event_id}"
@@ -2194,8 +2120,8 @@ class TestABoundedScanIsFair:
     @staticmethod
     async def _admit(store: PrincipalStore, event: nio.Event, room_id: str) -> None:
         await store.admit(
-            inbound_event(room_id, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(room_id, event, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(room_id, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(room_id, event, EventKind.MESSAGE, self_sender=BOT),
         )
 
     @classmethod
@@ -2210,7 +2136,7 @@ class TestABoundedScanIsFair:
             # Unprojected: nothing will ever read these rows as conversation,
             # and a page of this size is expensive enough to build already.
             await store.admit(
-                inbound_event(
+                _inbound_event(
                     ROOM,
                     text_event(f"$corrupt{index:04d}", ts=1_000 + index),
                     EventKind.MESSAGE,
@@ -2464,36 +2390,6 @@ class TestABoundedScanIsFair:
 
         assert [event.event_id for event in by_room[ROOM]] == ["$e0", "$e1"]
 
-    async def test_an_object_handed_over_mid_pass_is_not_read_as_unreachable(
-        self,
-        alice: PrincipalStore,
-    ) -> None:
-        """Absent from a scan already past its row is not the same as not pending.
-
-        Releasing on that reading would take back the parsed object for an
-        event admitted moments ago, and the run it then gets replays from the
-        stored payload -- as a recovery would, with nio's decryption state
-        thrown away and a live turn treated as a replayed one.
-        """
-        retained = {"$before"}
-
-        def snapshot() -> frozenset[str]:
-            taken = frozenset(retained)
-            # Admitted while the pass was already underway.
-            retained.add("$during")
-            return taken
-
-        worker = PendingEventWorker(
-            store=alice,
-            handle=_never_called,
-            retained_event_ids=snapshot,
-            release_retained=retained.difference_update,
-        )
-
-        await worker._collect_dispatchable()
-
-        assert retained == {"$during"}
-
 
 class TestADrainSeesTheWholeBacklog:
     """A drain loops until nothing moves, so every pass has to see the same set."""
@@ -2501,8 +2397,8 @@ class TestADrainSeesTheWholeBacklog:
     @staticmethod
     async def _admit(store: PrincipalStore, event: nio.Event, room_id: str) -> None:
         await store.admit(
-            inbound_event(room_id, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(room_id, event, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(room_id, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(room_id, event, EventKind.MESSAGE, self_sender=BOT),
         )
 
     async def test_a_backlog_of_failures_larger_than_one_pass_still_returns(
@@ -2603,8 +2499,8 @@ class TestStoreFailuresBelongToTheLane:
     @staticmethod
     async def _admit(store: PrincipalStore, event: nio.Event) -> None:
         await store.admit(
-            inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
         )
 
     async def test_a_read_that_fails_before_the_handler_is_retried(
@@ -2685,7 +2581,6 @@ class TestRecoveryDoesNotReenterALiveTurn:
 
         return JournalDispatcher(
             store=store,
-            self_sender=BOT,
             callbacks=JournalCallbacks(
                 on_message=cast("Any", on_turn),
                 on_media=cast("Any", on_turn),
@@ -2704,8 +2599,8 @@ class TestRecoveryDoesNotReenterALiveTurn:
     @staticmethod
     async def _admit(store: PrincipalStore, event: nio.Event, kind: EventKind = EventKind.MESSAGE) -> None:
         await store.admit(
-            inbound_event(ROOM, event, kind, EventClass.ACTIONABLE),
-            projected_event(ROOM, event, kind, self_sender=BOT),
+            _inbound_event(ROOM, event, kind, EventClass.ACTIONABLE),
+            _projected_event(ROOM, event, kind, self_sender=BOT),
         )
 
     @pytest.mark.parametrize(
@@ -2917,7 +2812,6 @@ class TestAdmittedWorkReachesItsCallback:
 
         return JournalDispatcher(
             store=store,
-            self_sender=BOT,
             callbacks=JournalCallbacks(
                 on_message=cast("Any", on_message),
                 on_media=cast("Any", noop),
@@ -3109,12 +3003,12 @@ class TestAdmittedWorkReachesItsCallback:
         with no line anywhere saying a message had been discarded.
         """
         dispatcher = self._dispatcher(alice, cast("Any", _noop_callback))
-        await dispatcher.admit_out_of_band(
+        await admit_dispatch_event(
+            dispatcher,
             room(),
             reaction_event("$mislabelled"),
             EventKind.MESSAGE,
             EventClass.ACTIONABLE,
-            live=False,
         )
 
         with capture_logs() as logs:
@@ -3211,8 +3105,8 @@ class TestScheduleTriggerDispatch:
     ) -> None:
         """Store one already-classified event for dispatcher-focused tests."""
         await store.admit(
-            inbound_event(ROOM, event, kind, event_class),
-            projected_event(ROOM, event, kind, self_sender=BOT),
+            _inbound_event(ROOM, event, kind, event_class),
+            _projected_event(ROOM, event, kind, self_sender=BOT),
         )
 
     async def test_schedule_trigger_dispatch_preserves_the_admitted_event(

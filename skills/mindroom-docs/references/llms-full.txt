@@ -860,9 +860,9 @@ MindRoom tracks runtime phases internally:
 When the semantic-search embedder is failing, the health payload additionally carries `"embedder": {"status": "failing", "detail": ...}` with the classified cause; this block is diagnostic only and never flips liveness.
 Use `/api/health` for liveness probes and `/api/ready` for readiness probes in container orchestrators.
 Ordinary Matrix transport silence still reaches the watchdog after 120 seconds and makes `/api/health` return `503` after 180 seconds without a successful sync.
-While a sync callback is actively completing its sequential durable cache phase, the watchdog and `/api/health` consume the same monotonic progress snapshot and defer for `MINDROOM_MATRIX_SYNC_CACHE_WRITE_GRACE_SECONDS` (default 600).
-Both stop deferring when that grace expires.
-Successful cache-phase completion refreshes both liveness clocks, so a long healthy write does not immediately return `503`.
+While Nio commits durable ingestion progress, the watchdog and `/api/health` consume the same monotonic progress snapshot and defer for up to `MINDROOM_MATRIX_INGESTION_GRACE_SECONDS` (default 600).
+Both stop deferring when that grace expires or progress stops advancing for their respective silence timeout.
+Successful sync completion refreshes both liveness clocks and clears the ingestion grace window.
 Configure liveness probe `failureThreshold` to allow sufficient time for watchdog self-healing.
 
 ### Tools & Matrix
@@ -1088,7 +1088,7 @@ Set `CODEX_HOME` only if your Codex CLI state lives outside `~/.codex`.
 | `MINDROOM_NO_AUTO_INSTALL_TOOLS` | Set to `1`/`true`/`yes` to disable automatic tool dependency installation | _(unset — auto-install enabled)_ |
 | `MINDROOM_MATRIX_HOMESERVER_STARTUP_TIMEOUT_SECONDS` | Seconds to wait for the homeserver to return a valid `/_matrix/client/versions` response at startup (`0` = wait indefinitely); MindRoom polls at a fixed interval until success or the deadline | _(wait indefinitely)_ |
 | `MINDROOM_MATRIX_SYNC_STARTUP_TIMEOUT_SECONDS` | Positive seconds allowed for the first Matrix sync response | `600` |
-| `MINDROOM_MATRIX_SYNC_CACHE_WRITE_GRACE_SECONDS` | Finite positive seconds the sync watchdog and `/api/health` may wait for one active durable sync-cache phase before treating it as wedged | `600` |
+| `MINDROOM_MATRIX_INGESTION_GRACE_SECONDS` | Finite positive seconds the sync watchdog and `/api/health` may defer while durable ingestion progress keeps advancing | `600` |
 | `MINDROOM_SCRIPT_GATEWAY_URL` | Complete worker-reachable background-script gateway base URL, including `/api/script-gateway`; required for Kubernetes and for Docker unless a reachable `MINDROOM_PUBLIC_URL` is configured | _(none)_ |
 | `MINDROOM_SCRIPT_GATEWAY_ISOLATED` | Operator attestation that the Kubernetes worker's configured script-gateway listener exposes only `/api/script-gateway`; required to admit Kubernetes background scripts and does not create network isolation itself | `false` |
 | `MINDROOM_KUBERNETES_DEFAULT_SCRIPT_RESOURCE_PROFILE` | Default Kubernetes background-script profile (`small`, `standard`, or `large`) when `start_script` omits `resource_profile` | `small` |
@@ -1096,8 +1096,8 @@ Set `CODEX_HOME` only if your Codex CLI state lives outside `~/.codex`.
 | `MINDROOM_SCRIPT_RETENTION_SECONDS` | Finite positive seconds to retain terminal background-script runs, tool-call receipts, approval rows, and durable approval records before lifecycle pruning | `2592000` (30 days) |
 | `MINDROOM_WORKER_BACKEND` | Worker backend for tool execution (`static_runner`, `docker`, or `kubernetes`) | `static_runner` |
 
-The sync cache-write grace is a hang backstop rather than the ordinary Matrix transport timeout; set it above the observed healthy cache-write p99 for the deployment.
-Raising it delays both watchdog cancellation and liveness failure only while a sync callback is actively completing its sequential durable cache phase.
+The ingestion grace bounds continuous catch-up; set it above the observed healthy catch-up duration for the deployment.
+Raising it delays both watchdog cancellation and liveness failure only while durable ingestion progress keeps advancing.
 
 ### OpenAI-Compatible API
 

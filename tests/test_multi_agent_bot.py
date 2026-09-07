@@ -233,7 +233,6 @@ class TestAgentBot(AgentBotTestBase):
         )
 
         matrix_id = bot.matrix_id.full_id
-        assert bot._journal_dispatcher.self_sender == matrix_id
         assert bot._conversation_reader.hydrator.self_sender == matrix_id
         assert bot._journal_principal_id != matrix_id
 
@@ -1544,6 +1543,7 @@ class TestAgentBot(AgentBotTestBase):
 
         room = MagicMock(spec=nio.MatrixRoom)
         room.room_id = "!test:localhost"
+        room.own_user_id = bot.matrix_id.full_id
         room.canonical_alias = None
         room.users = {"@mindroom_calculator:localhost": MagicMock(), "@user:localhost": MagicMock()}
 
@@ -1593,6 +1593,7 @@ class TestAgentBot(AgentBotTestBase):
 
         room = MagicMock(spec=nio.MatrixRoom)
         room.room_id = "!test:localhost"
+        room.own_user_id = bot.matrix_id.full_id
         room.canonical_alias = None
         room.users = {"@mindroom_calculator:localhost": MagicMock(), "@user:localhost": MagicMock()}
 

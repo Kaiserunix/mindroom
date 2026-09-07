@@ -26,7 +26,7 @@ class _OwnedIngestionSession(Protocol):
     async def dispatch(self, record: SyncRecord, *, event: object | None = None) -> None: ...
 
 
-type _BeforeAdmission = Callable[[ej.IngestionRecordAdmission], None]
+type _BeforeAdmission = Callable[[ej.IngestionRecordAdmission, nio.TimelineEventProvenance | None], None]
 type _AfterAdmission = Callable[
     [ej.IngestionRecordAdmission, ej.AdmissionFacts, nio.TimelineEventProvenance | None],
     Awaitable[None],
@@ -137,8 +137,8 @@ async def consume_one_ingestion_batch(
     )
     invalidate_membership_lookups(batch.records, account_id=account_id)
     if before_admission is not None:
-        for record in converted.records:
-            before_admission(record)
+        for record, converted_record in zip(batch.records, converted.records, strict=True):
+            before_admission(converted_record, record.provenance)
     result = await admission.admit_ingestion_batch(converted)
     for record, converted_record, facts in zip(batch.records, converted.records, result.record_facts, strict=True):
         if after_admission is not None:

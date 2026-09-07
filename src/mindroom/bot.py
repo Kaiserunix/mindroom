@@ -46,9 +46,7 @@ from mindroom.matrix.durable_ingestion import run_ingestion_pump
 from mindroom.matrix.durable_membership import change_local_membership
 from mindroom.matrix.event_info import EventInfo, origin_server_ts_from_event_source
 from mindroom.matrix.health import (
-    SyncCacheWriteProgress,
     clear_matrix_sync_state,
-    get_matrix_sync_cache_write_progress,
     mark_matrix_sync_loop_started,
     mark_matrix_sync_success,
 )
@@ -660,7 +658,6 @@ class AgentBot:
         )
         self._journal_dispatcher = JournalDispatcher(
             store=self._journal_store.principal(self._journal_principal_id),
-            self_sender=runtime_matrix_id.full_id,
             callbacks=JournalCallbacks(
                 on_message=self._on_message,
                 on_media=self._on_media_message,
@@ -1422,10 +1419,6 @@ class AgentBot:
             return None
         return time.monotonic() - self._last_sync_monotonic
 
-    def sync_cache_write_progress(self) -> SyncCacheWriteProgress | None:
-        """Return the durable sync-cache phase shared by watchdog and health."""
-        return get_matrix_sync_cache_write_progress(self.agent_name)
-
     def durable_ingestion_progress_generation(self) -> int | None:
         """Return nio's commit-gated progress generation for the owned session."""
         session = self._ingestion_session
@@ -1555,11 +1548,20 @@ class AgentBot:
         if effects.authorization_changed:
             self._schedule_reply_authorized_call_revocation()
 
-    def _before_ingestion_admission(self, admission: IngestionRecordAdmission) -> None:
+    def _before_ingestion_admission(
+        self,
+        admission: IngestionRecordAdmission,
+        timeline_provenance: nio.TimelineEventProvenance | None,
+    ) -> None:
         """Revoke uncertain control-room grants before admitting more work."""
         if self.agent_name == ROUTER_AGENT_NAME:
             self._apply_reply_membership_pre_admission(
-                self._router_reply_membership_sync.pre_admit_ingestion(self.config, self.runtime_paths, admission),
+                self._router_reply_membership_sync.pre_admit_ingestion(
+                    self.config,
+                    self.runtime_paths,
+                    admission,
+                    timeline_provenance,
+                ),
             )
 
     async def _after_ingestion_admission(

@@ -139,11 +139,6 @@ class BotRoomLifecycle:
         """Return whether pre-join decrypt failures in this room stay silent."""
         return room_id in self._decrypt_notice_fenced_room_ids
 
-    @property
-    def _has_pending_join_decrypt_fences(self) -> bool:
-        """Return whether any durable join fence needs sync settlement."""
-        return bool(self._decrypt_notice_fenced_room_ids)
-
     async def observe_trusted_sync_rooms(self, room_ids: Iterable[str]) -> None:
         """Clear join fences for rooms included in one trusted sync response."""
         record = await asyncio.to_thread(

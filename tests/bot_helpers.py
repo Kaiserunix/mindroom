@@ -61,6 +61,7 @@ from tests.conftest import (
 )
 from tests.conftest import replace_turn_policy_deps as shared_replace_turn_policy_deps
 from tests.identity_helpers import entity_ids, persist_entity_accounts
+from tests.journal_helpers import admit_dispatch_event
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
@@ -177,9 +178,13 @@ async def dispatch_reaction_durably(
     source.setdefault("sender", event.sender)
     source.setdefault("origin_server_ts", 1)
     source.setdefault("type", "m.reaction")
+    source["content"] = {
+        **source.get("content", {}),
+        "m.relates_to": {"rel_type": "m.annotation", "event_id": event.reacts_to, "key": event.key},
+    }
     event.source = source
     event.decrypted = False
-    await bot._journal_dispatcher.admit_out_of_band(room, event, EventKind.REACTION, EventClass.ACTIONABLE)
+    await admit_dispatch_event(bot._journal_dispatcher, room, event, EventKind.REACTION, EventClass.ACTIONABLE)
     await bot._journal_dispatcher.drain_once()
 
 

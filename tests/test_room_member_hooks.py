@@ -41,6 +41,7 @@ from tests.conftest import (
     test_runtime_paths,
 )
 from tests.identity_helpers import persist_entity_accounts
+from tests.journal_helpers import admit_dispatch_event
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -284,12 +285,12 @@ async def test_router_dispatches_recovered_room_member_self_leave_once(tmp_path:
         membership="leave",
         prev_membership="join",
     )
-    await bot._journal_dispatcher.admit_out_of_band(
+    await admit_dispatch_event(
+        bot._journal_dispatcher,
         room,
         event,
         EventKind.ROOM_LIFECYCLE,
         EventClass.ACTIONABLE,
-        live=False,
     )
 
     await bot._journal_dispatcher.drain_once()

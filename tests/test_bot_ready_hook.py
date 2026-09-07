@@ -457,7 +457,7 @@ async def test_router_limited_sync_invalidates_then_rebuilds_room_backed_grants(
     orchestrator.invalidate_agent_reply_memberships.reset_mock()
     orchestrator.refresh_agent_reply_memberships.reset_mock()
     admission = _history_loss_admission("!project:localhost")
-    bot._before_ingestion_admission(admission)
+    bot._before_ingestion_admission(admission, TimelineEventProvenance.LIVE)
 
     with (
         patch("mindroom.bot.mark_matrix_sync_success", return_value=datetime.now(UTC)),
@@ -474,7 +474,7 @@ def test_router_limited_sync_invalidates_before_timeline_admission(tmp_path: Pat
     bot, orchestrator = _router_bot_with_orchestrator(tmp_path)
     admission = _history_loss_admission("!project:localhost")
 
-    bot._before_ingestion_admission(admission)
+    bot._before_ingestion_admission(admission, TimelineEventProvenance.LIVE)
 
     orchestrator.invalidate_agent_reply_memberships.assert_called_once_with(reason="uncertain_sync_response")
 
@@ -523,8 +523,8 @@ async def test_router_departure_revokes_grant_before_timeline_admission(
         sequence=1,
     )
 
-    bot._before_ingestion_admission(departure)
-    bot._before_ingestion_admission(second_departure)
+    bot._before_ingestion_admission(departure, TimelineEventProvenance.LIVE)
+    bot._before_ingestion_admission(second_departure, TimelineEventProvenance.LIVE)
     await wait_for_background_tasks(timeout=1.0, owner=bot._runtime_view)
 
     assert not bot._runtime_view.agent_reply_memberships.is_allowed(
@@ -645,7 +645,7 @@ async def test_router_authoritative_departure_revokes_grant_before_membership_fe
         previous_epoch=0,
         transport=transport,
     )
-    bot._before_ingestion_admission(admission)
+    bot._before_ingestion_admission(admission, TimelineEventProvenance.LIVE)
 
     assert not index.is_allowed(sender_id, ["grant"], bot.config, bot.runtime_paths)
     assert index.needs_refresh(bot.config)
@@ -705,8 +705,8 @@ async def test_router_leave_then_rejoin_in_one_sync_requires_grant_refresh(tmp_p
         event_id="$rejoin",
     )
 
-    bot._before_ingestion_admission(departure)
-    bot._before_ingestion_admission(rejoin)
+    bot._before_ingestion_admission(departure, TimelineEventProvenance.LIVE)
+    bot._before_ingestion_admission(rejoin, TimelineEventProvenance.LIVE)
     await wait_for_background_tasks(timeout=1.0, owner=bot._runtime_view)
 
     assert not index.is_allowed(sender_id, ["grant"], bot.config, bot.runtime_paths)
@@ -748,7 +748,7 @@ async def test_router_final_invite_revokes_grant_before_timeline_admission(
         transport=transport,
     )
 
-    bot._before_ingestion_admission(admission)
+    bot._before_ingestion_admission(admission, TimelineEventProvenance.LIVE)
     await wait_for_background_tasks(timeout=1.0, owner=bot._runtime_view)
 
     assert not index.is_allowed(sender_id, ["grant"], bot.config, bot.runtime_paths)
@@ -798,7 +798,7 @@ async def test_grant_user_revocation_waits_for_durable_live_admission(
         sequence=0,
     )
 
-    bot._before_ingestion_admission(admission)
+    bot._before_ingestion_admission(admission, TimelineEventProvenance.LIVE)
     await wait_for_background_tasks(timeout=1.0, owner=bot._runtime_view)
 
     assert index.is_allowed(sender_id, ["grant"], bot.config, bot.runtime_paths)
@@ -849,7 +849,7 @@ async def test_grant_user_join_waits_for_durable_timeline_admission(
         sequence=0,
     )
 
-    bot._before_ingestion_admission(admission)
+    bot._before_ingestion_admission(admission, TimelineEventProvenance.LIVE)
     await wait_for_background_tasks(timeout=1.0, owner=bot._runtime_view)
 
     assert not index.is_allowed(sender_id, ["grant"], bot.config, bot.runtime_paths)
@@ -916,8 +916,8 @@ async def test_live_membership_replay_retries_an_unfinished_reconciliation(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_recovered_membership_does_not_change_live_reply_grants(tmp_path: Path) -> None:
-    """Recovered membership history must not mutate the router's current grant snapshot."""
+async def test_recovered_membership_does_not_grant_reply_access(tmp_path: Path) -> None:
+    """Recovered membership history must not grant authority without a current roster."""
     room_id = "!grant:localhost"
     sender_id = "@bob:localhost"
     bot, orchestrator = _router_bot_with_orchestrator(tmp_path)
@@ -1022,8 +1022,8 @@ async def test_grant_user_join_then_revoke_applies_in_durable_order(
     )
 
     orchestrator.reconcile_reply_authorized_calls = AsyncMock()
-    bot._before_ingestion_admission(join_admission)
-    bot._before_ingestion_admission(revoke_admission)
+    bot._before_ingestion_admission(join_admission, TimelineEventProvenance.LIVE)
+    bot._before_ingestion_admission(revoke_admission, TimelineEventProvenance.LIVE)
     assert not index.is_allowed(sender_id, ["grant"], bot.config, bot.runtime_paths)
 
     await bot._after_ingestion_admission(

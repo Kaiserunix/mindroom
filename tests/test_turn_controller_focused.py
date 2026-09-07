@@ -119,6 +119,7 @@ from tests.conftest import (
     runtime_paths_for,
     test_runtime_paths,
 )
+from tests.journal_helpers import admit_dispatch_event
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping
@@ -774,7 +775,6 @@ def _obligation_runner(
     store = EventJournalStore.open_sqlite(tracking_path / "event_journal.db")
     return JournalDispatcher(
         store=store.principal(f"{entity_name}@{principal_id}"),
-        self_sender=principal_id,
         callbacks=JournalCallbacks(
             on_message=harness.controller.handle_text_event,
             on_media=harness.controller.handle_media_event,
@@ -1317,17 +1317,14 @@ async def test_duplicate_router_relay_claim_settles_without_restart(config: Conf
         return await resolve_text_event(request)
 
     with patch.object(InboundTurnNormalizer, "resolve_text_event", new=resolve_with_barrier):
-        first_dispatch = asyncio.create_task(
-            obligation_runner._admit_and_run(room, first, EventKind.MESSAGE, EventClass.ACTIONABLE),
-        )
+        await admit_dispatch_event(obligation_runner, room, first, EventKind.MESSAGE, EventClass.ACTIONABLE)
+        first_dispatch = asyncio.create_task(obligation_runner.drain_once())
         await normalization_started.wait()
-        second_dispatch = asyncio.create_task(
-            obligation_runner._admit_and_run(room, second, EventKind.MESSAGE, EventClass.ACTIONABLE),
-        )
-        await asyncio.sleep(0)
-        assert not second_dispatch.done()
+        await admit_dispatch_event(obligation_runner, room, second, EventKind.MESSAGE, EventClass.ACTIONABLE)
+        assert not first_dispatch.done()
         release_normalization.set()
-        await asyncio.gather(first_dispatch, second_dispatch)
+        await first_dispatch
+        await obligation_runner.drain_once()
 
     await harness.gate.drain_all()
     await harness.runner.settle_inbox_responses()
@@ -1455,7 +1452,7 @@ async def test_failed_gate_admission_releases_ingress_claim_once(
         entity_name="general",
         room=room,
     )
-    await obligation_runner.admit_out_of_band(room, event, EventKind.MESSAGE, EventClass.ACTIONABLE)
+    await admit_dispatch_event(obligation_runner, room, event, EventKind.MESSAGE, EventClass.ACTIONABLE)
 
     with pytest.raises(IngressAdmissionClosedError):
         await obligation_runner.callbacks.on_message(room, event)
@@ -1489,7 +1486,7 @@ async def test_failed_media_admission_remains_a_pending_exact_callback(
         entity_name="general",
         room=room,
     )
-    await obligation_runner.admit_out_of_band(room, event, EventKind.MEDIA, EventClass.ACTIONABLE)
+    await admit_dispatch_event(obligation_runner, room, event, EventKind.MEDIA, EventClass.ACTIONABLE)
 
     with pytest.raises(IngressAdmissionClosedError):
         await obligation_runner.callbacks.on_message(room, event)
@@ -1521,7 +1518,8 @@ async def test_router_silent_ignore_compacts_exact_callback(config: Config, tmp_
         ),
     )
 
-    await obligation_runner._admit_and_run(room, event, EventKind.MESSAGE, EventClass.ACTIONABLE)
+    await admit_dispatch_event(obligation_runner, room, event, EventKind.MESSAGE, EventClass.ACTIONABLE)
+    await obligation_runner.drain_once()
     await harness.gate.drain_all()
 
     assert harness.policy.plan_turn_calls == 1
@@ -2034,7 +2032,7 @@ async def test_policy_decision_reserves_config_until_response_handoff(
 async def test_an_emote_is_answered_like_any_other_user_message(config: Config, tmp_path: Path) -> None:
     """`/me asks the bot to X` produces a reply, with its body as the prompt.
 
-    Driven through ``_admit_and_run`` rather than the controller directly,
+    Driven through the journal dispatcher rather than the controller directly,
     because the thing that refused an emote was the journal's kind binding, not
     the turn engine: the event was committed as actionable work and then
     discarded by an ``isinstance`` check before any turn existed.
@@ -2054,7 +2052,8 @@ async def test_an_emote_is_answered_like_any_other_user_message(config: Config, 
         room=room,
     )
 
-    await obligation_runner._admit_and_run(room, event, EventKind.MESSAGE, EventClass.ACTIONABLE)
+    await admit_dispatch_event(obligation_runner, room, event, EventKind.MESSAGE, EventClass.ACTIONABLE)
+    await obligation_runner.drain_once()
     await harness.gate.drain_all()
     await harness.runner.settle_inbox_responses()
 
@@ -2677,7 +2676,8 @@ async def test_eventless_silent_schedule_completion_is_terminal_before_recovery(
         ),
     )
 
-    await obligation_runner._admit_and_run(room, event, EventKind.SCHEDULE_TRIGGER, EventClass.ACTIONABLE)
+    await admit_dispatch_event(obligation_runner, room, event, EventKind.SCHEDULE_TRIGGER, EventClass.ACTIONABLE)
+    await obligation_runner.drain_once()
     await harness.gate.drain_all()
     await harness.runner.settle_inbox_responses()
 

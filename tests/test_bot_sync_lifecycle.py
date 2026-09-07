@@ -23,6 +23,7 @@ from mindroom.dispatch_callback_outcome import TurnDispatchOutcome
 from mindroom.event_journal import EventClass, EventKind
 from mindroom.hooks import EVENT_AGENT_STARTED
 from mindroom.runtime_shutdown import ORDERLY_SHUTDOWN, SYNC_RESTART_SHUTDOWN
+from tests.journal_helpers import admit_dispatch_event
 from tests.threading_helpers import (
     ThreadingBehaviorTestBase,
     _make_client_mock,
@@ -75,7 +76,7 @@ class TestBotSyncLifecycle(ThreadingBehaviorTestBase):
             await bot.start()
 
         try:
-            await dispatcher.admit_out_of_band(room, event, EventKind.REACTION, EventClass.ACTIONABLE)
+            await admit_dispatch_event(dispatcher, room, event, EventKind.REACTION, EventClass.ACTIONABLE)
             with pytest.raises(TimeoutError):
                 await asyncio.wait_for(dispatched.wait(), timeout=0.05)
             assert await dispatcher.store.is_pending(event.event_id)

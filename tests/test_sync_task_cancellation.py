@@ -37,9 +37,6 @@ from mindroom.constants import ROUTER_AGENT_NAME, RuntimePaths
 from mindroom.hooks import HookRegistry, HookRegistryState
 from mindroom.matrix.client_session import MindRoomAsyncClient
 from mindroom.matrix.health import (
-    SyncCacheWriteProgress,
-    _track_matrix_sync_cache_write,
-    get_matrix_sync_cache_write_progress,
     get_matrix_sync_health_snapshot,
     mark_matrix_ingestion_progress,
     mark_matrix_sync_loop_started,
@@ -61,7 +58,7 @@ from mindroom.orchestration.runtime import (
     is_sync_restart_cancel,
     log_cancelled_response,
     log_cancelled_response_source,
-    matrix_sync_cache_write_grace_seconds,
+    matrix_ingestion_grace_seconds,
     matrix_sync_startup_timeout_seconds,
     stop_entities,
     sync_forever_with_restart,
@@ -180,9 +177,6 @@ class _FakeBot:
         if self._last_sync_monotonic is None:
             return None
         return time.monotonic() - self._last_sync_monotonic
-
-    def sync_cache_write_progress(self) -> SyncCacheWriteProgress | None:
-        return get_matrix_sync_cache_write_progress(self.agent_name)
 
     def durable_ingestion_progress_generation(self) -> int | None:
         return self._durable_ingestion_progress_generation
@@ -1442,54 +1436,20 @@ async def test_sync_error_updates_watchdog_clock(monkeypatch: pytest.MonkeyPatch
     assert bot.first_call_cancelled is False
 
 
-def test_sync_cache_write_progress_registry_clears_after_failure() -> None:
-    """A failed durable phase must not leave watchdog and health exempt forever."""
-    reset_matrix_sync_health()
-    try:
-        with suppress(RuntimeError), _track_matrix_sync_cache_write("failed_agent"):
-            msg = "cache write failed"
-            raise RuntimeError(msg)
-
-        assert get_matrix_sync_cache_write_progress("failed_agent") is None
-    finally:
-        reset_matrix_sync_health()
-
-
 @pytest.mark.parametrize("raw", ["not-a-number", "nan", "inf", "-inf", "0", "-1"])
-def test_sync_cache_write_grace_rejects_non_finite_or_non_positive(raw: str) -> None:
+def test_ingestion_grace_rejects_non_finite_or_non_positive(raw: str) -> None:
     """An invalid grace must not disable the bounded backstop."""
     with pytest.raises(ValueError, match="must be a finite positive number"):
-        matrix_sync_cache_write_grace_seconds(
-            _fake_runtime_paths(MINDROOM_MATRIX_SYNC_CACHE_WRITE_GRACE_SECONDS=raw),
+        matrix_ingestion_grace_seconds(
+            _fake_runtime_paths(MINDROOM_MATRIX_INGESTION_GRACE_SECONDS=raw),
         )
 
 
 @pytest.mark.parametrize("grace_seconds", [math.nan, math.inf, -math.inf, 0.0, -1.0])
-def test_health_rejects_invalid_cache_write_grace(grace_seconds: float) -> None:
-    """Every health caller must preserve the finite cache-write backstop."""
-    with pytest.raises(ValueError, match="cache_write_grace_seconds must be a finite positive number"):
-        get_matrix_sync_health_snapshot(cache_write_grace_seconds=grace_seconds)
-
-
-def test_health_reports_shared_cache_write_progress_past_grace() -> None:
-    """Health must stop excusing a durable phase after the shared grace expires."""
-    recent_sync_time = datetime.now(UTC) - timedelta(seconds=10)
-    reset_matrix_sync_health()
-    try:
-        mark_matrix_sync_loop_started("wedged_agent")
-        mark_matrix_sync_success("wedged_agent", recent_sync_time)
-        with _track_matrix_sync_cache_write("wedged_agent"):
-            progress = get_matrix_sync_cache_write_progress("wedged_agent")
-            assert progress is not None
-
-            snapshot = get_matrix_sync_health_snapshot(
-                cache_write_grace_seconds=5.0,
-                now_monotonic=progress.started_monotonic + 6.0,
-            )
-
-        assert snapshot.stale_entities == ("wedged_agent",)
-    finally:
-        reset_matrix_sync_health()
+def test_health_rejects_invalid_ingestion_grace(grace_seconds: float) -> None:
+    """Every health caller must preserve the finite ingestion backstop."""
+    with pytest.raises(ValueError, match="ingestion_grace_seconds must be a finite positive number"):
+        get_matrix_sync_health_snapshot(ingestion_grace_seconds=grace_seconds)
 
 
 def test_health_defers_only_bounded_recent_owned_ingestion_progress() -> None:
@@ -1503,11 +1463,11 @@ def test_health_defers_only_bounded_recent_owned_ingestion_progress() -> None:
         mark_matrix_ingestion_progress("draining_agent", now_monotonic=102.0)
 
         healthy = get_matrix_sync_health_snapshot(
-            cache_write_grace_seconds=5.0,
+            ingestion_grace_seconds=5.0,
             now_monotonic=103.0,
         )
         past_grace = get_matrix_sync_health_snapshot(
-            cache_write_grace_seconds=5.0,
+            ingestion_grace_seconds=5.0,
             now_monotonic=106.0,
         )
 
@@ -1518,44 +1478,11 @@ def test_health_defers_only_bounded_recent_owned_ingestion_progress() -> None:
 
 
 @pytest.mark.asyncio
-async def test_watchdog_defers_to_shared_cache_write_progress(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A slow durable phase must outlive the ordinary transport timeout."""
-    bot = _FakeBot(MINDROOM_MATRIX_SYNC_CACHE_WRITE_GRACE_SECONDS="1")
-    cache_write_finished = asyncio.Event()
-
-    async def sync_with_slow_cache_write() -> None:
-        bot.sync_calls += 1
-        bot._last_sync_monotonic = time.monotonic()
-        try:
-            with _track_matrix_sync_cache_write(bot.agent_name):
-                await asyncio.sleep(0.1)
-        except asyncio.CancelledError:
-            bot.first_call_cancelled = True
-            raise
-        cache_write_finished.set()
-        bot.running = False
-
-    bot.sync_forever = sync_with_slow_cache_write
-    monkeypatch.setattr(runtime_helpers, "MATRIX_SYNC_WATCHDOG_TIMEOUT_SECONDS", 0.02)
-    monkeypatch.setattr(runtime_helpers, "_MATRIX_SYNC_WATCHDOG_POLL_INTERVAL_SECONDS", 0.005)
-
-    reset_matrix_sync_health()
-    try:
-        await sync_forever_with_restart(bot, max_retries=1)
-    finally:
-        reset_matrix_sync_health()
-
-    assert cache_write_finished.is_set()
-    assert bot.first_call_cancelled is False
-    assert bot.sync_calls == 1
-
-
-@pytest.mark.asyncio
 async def test_watchdog_defers_while_owned_ingestion_commits_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Committed batches may keep ingestion alive beyond the ordinary sync timeout."""
-    bot = _FakeBot(MINDROOM_MATRIX_SYNC_CACHE_WRITE_GRACE_SECONDS="1")
+    bot = _FakeBot(MINDROOM_MATRIX_INGESTION_GRACE_SECONDS="1")
     bot._durable_ingestion_progress_generation = 0
     now = 100.0
     generations = iter(range(1, 11))
@@ -1606,7 +1533,7 @@ async def test_watchdog_cancels_owned_ingestion_progress_past_finite_grace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Continuous commits cannot exempt an incomplete Frame forever."""
-    bot = _FakeBot(MINDROOM_MATRIX_SYNC_CACHE_WRITE_GRACE_SECONDS="0.04")
+    bot = _FakeBot(MINDROOM_MATRIX_INGESTION_GRACE_SECONDS="0.04")
 
     async def sync_with_unbounded_durable_progress() -> None:
         bot.sync_calls += 1
@@ -1636,39 +1563,6 @@ async def test_watchdog_cancels_owned_ingestion_progress_past_finite_grace(
 
     assert bot.first_call_cancelled is True
     assert bot.sync_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_watchdog_cancels_shared_cache_write_past_grace(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A wedged durable phase must still be cancelled after its finite grace."""
-    bot = _FakeBot(MINDROOM_MATRIX_SYNC_CACHE_WRITE_GRACE_SECONDS="0.04")
-
-    async def sync_with_wedged_cache_write() -> None:
-        bot.sync_calls += 1
-        bot._last_sync_monotonic = time.monotonic()
-        try:
-            with _track_matrix_sync_cache_write(bot.agent_name):
-                await asyncio.Event().wait()
-        except asyncio.CancelledError:
-            bot.first_call_cancelled = True
-            raise
-
-    bot.sync_forever = sync_with_wedged_cache_write
-    monkeypatch.setattr(runtime_helpers, "MATRIX_SYNC_WATCHDOG_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(runtime_helpers, "_MATRIX_SYNC_WATCHDOG_POLL_INTERVAL_SECONDS", 0.005)
-    monkeypatch.setattr(runtime_helpers, "retry_delay_seconds", lambda *_args, **_kwargs: 0.0)
-    monkeypatch.setattr(runtime_helpers, "_stalled_restart_jitter_seconds", lambda: 0.0)
-
-    reset_matrix_sync_health()
-    try:
-        with capture_logs() as logs:
-            await sync_forever_with_restart(bot, max_retries=1)
-    finally:
-        reset_matrix_sync_health()
-
-    assert bot.first_call_cancelled is True
-    stall_logs = [entry for entry in logs if entry["event"] == "matrix_sync_watchdog_stalled"]
-    assert [entry["restart_reason_category"] for entry in stall_logs] == ["cache_write_grace_exhausted"]
 
 
 @pytest.mark.asyncio

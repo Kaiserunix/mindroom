@@ -185,7 +185,7 @@ def _event_source(event: _MatrixEvent) -> dict[str, object]:
     return source
 
 
-def inbound_event(
+def _inbound_event(
     room_id: str,
     event: nio.Event,
     kind: EventKind,
@@ -205,7 +205,7 @@ def inbound_event(
     )
 
 
-def projected_event(
+def _projected_event(
     room_id: str,
     event: nio.Event,
     kind: EventKind,
@@ -281,8 +281,8 @@ def ingestion_timeline_views(
         return None
     event_class = _event_class_for(provenance, parsed)
     return (
-        inbound_event(room_id, parsed, kind, event_class),
-        projected_event(room_id, parsed, kind, self_sender=self_sender),
+        _inbound_event(room_id, parsed, kind, event_class),
+        _projected_event(room_id, parsed, kind, self_sender=self_sender),
     )
 
 

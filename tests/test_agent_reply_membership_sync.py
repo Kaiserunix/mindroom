@@ -59,17 +59,18 @@ def test_history_loss_invalidates_all_reply_membership_grants(tmp_path: Path) ->
             IngestionRecordDisposition.HISTORY_LOSS,
             room_id="!uncertain:localhost",
         ),
+        None,
     )
 
     assert effects == ReplyMembershipPreAdmission(invalidate_reason="uncertain_sync_response")
     memberships.invalidate.assert_not_called()
-    memberships.mark_control_room_unready.assert_not_called()
+    memberships.mark_room_unready.assert_not_called()
 
 
 def test_reported_control_departure_fences_room_before_admission(tmp_path: Path) -> None:
     """A reported control departure revokes that room before admission."""
     memberships = MagicMock(spec=AgentReplyMembershipIndex)
-    memberships.mark_control_room_unready.return_value = True
+    memberships.mark_room_unready.return_value = True
     membership_sync = AgentReplyMembershipSync(memberships)
     config = Config()
     runtime_paths = test_runtime_paths(tmp_path)
@@ -84,10 +85,11 @@ def test_reported_control_departure_fences_room_before_admission(tmp_path: Path)
             previous_membership="join",
             membership="leave",
         ),
+        None,
     )
 
     assert effects == ReplyMembershipPreAdmission(authorization_changed=True)
-    memberships.mark_control_room_unready.assert_called_once_with(
+    memberships.mark_room_unready.assert_called_once_with(
         config,
         runtime_paths,
         "!departed:localhost",
@@ -127,11 +129,12 @@ def test_non_reported_departure_carriers_do_not_change_reply_memberships(
         Config(),
         test_runtime_paths(tmp_path),
         admission,
+        None,
     )
 
     assert effects == ReplyMembershipPreAdmission()
     memberships.invalidate.assert_not_called()
-    memberships.mark_control_room_unready.assert_not_called()
+    memberships.mark_room_unready.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -66,7 +66,7 @@ Writes are serialized per store rather than per entity, so one principal's admis
 A row is keyed `(principal_id, event_id)`, so one Matrix event is one row no matter how many features could have claimed it, and the callback kind is a column on that row rather than part of its identity.
 Pending rows retain the original room and event source in `source_json` for replay.
 `state` holds one of exactly two values, `pending` and `settled`, so a callback that has never run and a callback that ran and deferred its source to a turn are the same durable fact.
-Telling those two apart is possible only in memory, from the parsed events the dispatcher is still holding and the live owners it can ask about, and a restart erases that -- which is why an interrupted turn replays its message instead of losing the answer.
+The dispatcher asks in-memory turn and response owners whether pending work is already running; after a restart those owners are gone, so interrupted turns replay from the journal.
 Settling clears `source_json` and any claimed semantic consumer in place rather than deleting the row, so terminal truth stays compact while the row goes on proving that this event already produced its one turn.
 Why the work ended, answered or deliberately not answered, is not recorded: that column existed for a while and was never read back.
 `journal_events` grows by one row per admitted event, and a settled row is retained rather than deleted so a replayed Matrix event is recognised by ID instead of admitted twice.

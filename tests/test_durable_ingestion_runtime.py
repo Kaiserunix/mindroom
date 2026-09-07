@@ -7,7 +7,7 @@ import json
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import nio
@@ -16,12 +16,15 @@ from nio.durable import DurableSyncConfig, RecordKind, SyncRecord
 from nio.durable.transport import HttpError
 
 from mindroom.bot import AgentBot
+from mindroom.config.access import ResponderAccessConfig
 from mindroom.constants import ROUTER_AGENT_NAME
 from mindroom.event_journal import DeliveryStage, RoomMembershipPosition
 from mindroom.matrix._owned_session import MatrixCredentials, open_owned_matrix_session
 from mindroom.matrix.client_session import create_authenticated_client
 from mindroom.matrix.durable_ingestion import consume_one_ingestion_batch
+from mindroom.matrix.state import MatrixState
 from mindroom.orchestrator import _MultiAgentOrchestrator
+from tests.bot_helpers import make_matrix_client_mock
 from tests.test_bot_ready_hook import _agent_bot
 from tests.test_durable_ingestion_admission import ROOM
 from tests.test_event_journal_store import admit, interactive_edit, interactive_prompt
@@ -87,6 +90,7 @@ async def _consume_frame(bot: AgentBot, session: DurableSync, frame: bytes) -> N
                     session,
                     bot.journal_principal(),
                     account_id=bot.agent_user.user_id,
+                    before_admission=bot._before_ingestion_admission,
                     after_admission=bot._after_ingestion_admission,
                     after_sync=after_sync,
                 )
@@ -95,6 +99,126 @@ async def _consume_frame(bot: AgentBot, session: DurableSync, frame: bytes) -> N
     finally:
         runner.cancel()
         await asyncio.gather(runner, return_exceptions=True)
+
+
+async def _consume_repaired_frame(
+    bot: AgentBot,
+    session: DurableSync,
+    frame: dict[str, object],
+    recovered: list[dict[str, object]],
+) -> list[SyncRecord]:
+    """Consume a limited sync using a real Nio gap-recovery response."""
+    frames: asyncio.Queue[bytes] = asyncio.Queue()
+    frames.put_nowait(json.dumps(frame).encode())
+
+    async def request(_method: str, path: str, *_args: object, **_kwargs: object) -> bytes:
+        if "/messages" in path:
+            return json.dumps({"start": "next", "end": "next2", "chunk": recovered}).encode()
+        return await frames.get()
+
+    session._transport.request = request
+    runner = asyncio.create_task(session.run())
+    complete = False
+    seen: list[SyncRecord] = []
+
+    async def after_sync() -> None:
+        nonlocal complete
+        complete = True
+
+    try:
+        async with asyncio.timeout(3):
+            while not complete:
+                batch = await session.next_batch()
+                if batch is not None:
+                    seen.extend(batch.records)
+                facts = await consume_one_ingestion_batch(
+                    session,
+                    bot.journal_principal(),
+                    account_id=bot.matrix_id.full_id,
+                    before_admission=bot._before_ingestion_admission,
+                    after_admission=bot._after_ingestion_admission,
+                    after_sync=after_sync,
+                )
+                if facts is None:
+                    await session.wait_for_work()
+    finally:
+        runner.cancel()
+        await asyncio.gather(runner, return_exceptions=True)
+    return seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejoined", [False, True])
+async def test_repaired_gap_fences_grants_until_authoritative_refresh(tmp_path: Path, rejoined: bool) -> None:
+    """Recovered membership closes stale grants without granting from historical joins."""
+    bot = _agent_bot(tmp_path, agent_name=ROUTER_AGENT_NAME)
+    bot.config.router.access = ResponderAccessConfig(members_of_rooms=["grant"])
+    state = MatrixState.load(runtime_paths=bot.runtime_paths)
+    state.add_room("grant", ROOM, "#grant:localhost", "Grant")
+    state.save(runtime_paths=bot.runtime_paths)
+    sender = "@alice:localhost"
+    join = {
+        "type": "m.room.member",
+        "event_id": "$join",
+        "sender": sender,
+        "state_key": sender,
+        "origin_server_ts": 1,
+        "content": {"membership": "join"},
+    }
+    leave = {**join, "event_id": "$leave", "origin_server_ts": 2, "content": {"membership": "leave"}}
+    tail = {
+        "type": "m.room.message",
+        "event_id": "$tail",
+        "sender": sender,
+        "origin_server_ts": 4,
+        "content": {"msgtype": "m.text", "body": "hello"},
+    }
+    recovered = [leave]
+    if rejoined:
+        recovered.append({**join, "event_id": "$rejoin", "origin_server_ts": 3})
+    index = bot._runtime_view.agent_reply_memberships
+    bot._schedule_reply_authorized_call_revocation = MagicMock()
+    async with _owned_session(bot) as session:
+        await _consume_frame(bot, session, _joined_frame([join]))
+        client = make_matrix_client_mock(user_id=bot.agent_user.user_id)
+        client.joined_rooms.return_value = nio.JoinedRoomsResponse(rooms=[ROOM])
+        control = nio.RoomMember(bot.agent_user.user_id, None, None)
+        member = nio.RoomMember(sender, None, None)
+        client.joined_members.return_value = nio.JoinedMembersResponse(members=[control, member], room_id=ROOM)
+        await index.refresh(bot.config, bot.runtime_paths, client)
+        assert index.is_allowed(sender, ["grant"], bot.config, bot.runtime_paths)
+        frame = {
+            "next_batch": "next2",
+            "rooms": {
+                "join": {
+                    ROOM: {
+                        "state": {"events": []},
+                        "timeline": {
+                            "limited": True,
+                            "prev_batch": "boundary",
+                            "events": [tail],
+                        },
+                    },
+                },
+            },
+        }
+        seen = await _consume_repaired_frame(bot, session, frame, [*recovered, tail])
+        assert not index.is_allowed(sender, ["grant"], bot.config, bot.runtime_paths)
+        assert not any(record.kind is RecordKind.LOSS for record in seen)
+        assert [record.provenance for record in seen if record.source.get("event_id") == "$leave"] == [
+            nio.TimelineEventProvenance.RECOVERED,
+        ]
+        bot._schedule_reply_authorized_call_revocation.assert_called()
+        client.joined_members.return_value = nio.JoinedMembersResponse(
+            members=[control, member] if rejoined else [control],
+            room_id=ROOM,
+        )
+        await bot._router_reply_membership_sync.refresh_if_needed(
+            bot.config,
+            lambda: index.refresh(bot.config, bot.runtime_paths, client),
+        )
+        assert client.joined_members.await_count == 2
+        assert index.is_allowed(sender, ["grant"], bot.config, bot.runtime_paths) is rejoined
 
 
 @pytest.mark.asyncio

@@ -75,7 +75,7 @@ from mindroom.ingress_lanes import ReceiptLaneKey
 from mindroom.matrix.client import ResolvedVisibleMessage
 from mindroom.matrix.event_info import EventInfo
 from mindroom.matrix.identity import MatrixID
-from mindroom.matrix.journal_ingress import inbound_event
+from mindroom.matrix.journal_ingress import _inbound_event
 from mindroom.matrix.room_membership import cached_joined_member_ids, room_membership_is_complete
 from mindroom.matrix.thread_diagnostics import (
     THREAD_HISTORY_DEGRADED_DIAGNOSTIC,
@@ -108,6 +108,7 @@ from tests.conftest import (
     unwrap_extracted_collaborator,
     wrap_extracted_collaborators,
 )
+from tests.journal_helpers import admit_dispatch_event
 from tests.threading_helpers import seed_hydrated_conversation, seed_unhydrated_room_event
 from tests.turn_dispatch_helpers import dispatch_test_turn, prepared_turn_recorder
 
@@ -188,14 +189,14 @@ async def _admit_pending_thread_event(
     land in a thread.
 
     ``kind`` is a parameter because thread membership is derived from content
-    for every kind alike -- ``inbound_event`` calls ``thread_root`` regardless
+    for every kind alike -- ``_inbound_event`` calls ``thread_root`` regardless
     -- so a non-turn-backed event can sit in a thread and be seen by a guard
     that only asks what is pending.
     """
     parsed = nio.Event.parse_event(event_source)
     assert isinstance(parsed, nio.Event)
     admitted = await bot._journal_store.principal(bot._journal_principal_id).admit(
-        inbound_event(str(event_source["room_id"]), parsed, kind, EventClass.ACTIONABLE),
+        _inbound_event(str(event_source["room_id"]), parsed, kind, EventClass.ACTIONABLE),
     )
     assert admitted is AdmissionResult.ADMITTED
 
@@ -317,6 +318,7 @@ def _handled_turn_source_event_ids(handled_turn: TurnRecord | None) -> list[str]
 def _make_room(room_id: str = "!room:localhost") -> MagicMock:
     room = MagicMock(spec=nio.MatrixRoom)
     room.room_id = room_id
+    room.own_user_id = "@mindroom_general:localhost"
     room.canonical_alias = None
     room.members_synced = True
     room.users = {}
@@ -586,7 +588,7 @@ async def test_post_gate_terminal_drop_settles_real_deferred_dispatch_obligation
     )
     dispatch = _prepared_dispatch(event_id=event.event_id, body=event.body)
     dispatcher = bot._journal_dispatcher
-    await dispatcher.admit_out_of_band(room, event, EventKind.MESSAGE, EventClass.ACTIONABLE)
+    await admit_dispatch_event(dispatcher, room, event, EventKind.MESSAGE, EventClass.ACTIONABLE)
 
     plan_turn = AsyncMock(return_value=_DispatchPlan(kind="ignore"))
     with (
@@ -4924,7 +4926,7 @@ async def test_backlog_replay_degraded_thread_history_ignores_pending_undecrypta
 
     The guard asks the journal for pending work in the thread, and *pending*
     alone does not mean *will answer*. Thread membership is derived from
-    content for every kind -- ``inbound_event`` calls ``thread_root``
+    content for every kind -- ``_inbound_event`` calls ``thread_root``
     unconditionally -- and an ``m.room.encrypted`` event keeps its
     ``m.relates_to`` in the clear so servers can aggregate relations. So a
     threaded message this bot could not decrypt is admitted pending, in the

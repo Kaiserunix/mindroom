@@ -59,6 +59,7 @@ from tests.conftest import (
     test_runtime_paths,
 )
 from tests.identity_helpers import actual_entity_usernames, entity_ids, entity_name_for_id, persist_entity_accounts
+from tests.journal_helpers import admit_dispatch_event
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -494,12 +495,12 @@ class TestRoutingRegression:
             room_id=room_id,
         )
         mock_suggest_responder.return_value = "healthy"
-        await router_bot._journal_dispatcher.admit_out_of_band(
+        await admit_dispatch_event(
+            router_bot._journal_dispatcher,
             room,
             event,
             EventKind.MESSAGE,
             EventClass.ACTIONABLE,
-            live=False,
         )
 
         await router_bot.recover_pending_turn_journal_events()
@@ -516,12 +517,12 @@ class TestRoutingRegression:
         mock_suggest_responder.reset_mock(return_value=True)
         mock_suggest_responder.return_value = "stuck"
         router_bot.client.room_send.reset_mock()
-        await router_bot._journal_dispatcher.admit_out_of_band(
+        await admit_dispatch_event(
+            router_bot._journal_dispatcher,
             room,
             blocked_event,
             EventKind.MESSAGE,
             EventClass.ACTIONABLE,
-            live=False,
         )
 
         await router_bot.recover_pending_turn_journal_events()

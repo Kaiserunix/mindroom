@@ -98,8 +98,8 @@ class ReplayView(Protocol):
         ...
 
 
-class DispatchView(ReplayView, AdmissionView, Protocol):
-    """Everything the dispatcher coordinates: admission, replay, and claims."""
+class DispatchView(ReplayView, Protocol):
+    """Everything the dispatcher coordinates: replay and semantic claims."""
 
     async def settle_many(self, event_ids: tuple[str, ...]) -> None:
         """Settle every event that one terminal turn accounted for."""

@@ -7,16 +7,17 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import nio
+
 from mindroom.event_journal import (
     DepartureSource,
+    EventKind,
     IngestionRecordAdmission,
     IngestionRecordDisposition,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-
-    import nio
 
     from mindroom.agent_reply_membership import AgentReplyMembershipIndex
     from mindroom.config.main import Config
@@ -102,23 +103,34 @@ class AgentReplyMembershipSync:
         config: Config,
         runtime_paths: RuntimePaths,
         admission: IngestionRecordAdmission,
+        timeline_provenance: nio.TimelineEventProvenance | None,
     ) -> ReplyMembershipPreAdmission:
         """Fence uncertainty and reported control departures before admission."""
         if admission.disposition is IngestionRecordDisposition.HISTORY_LOSS:
             return ReplyMembershipPreAdmission(invalidate_reason="uncertain_sync_response")
-        if not (
+        if (
+            timeline_provenance is nio.TimelineEventProvenance.RECOVERED
+            and admission.event is not None
+            and admission.event.kind is EventKind.ROOM_LIFECYCLE
+        ):
+            room_id = admission.event.room_id
+            reason = "recovered_membership"
+        elif (
             admission.membership is not None
             and admission.source is DepartureSource.REPORTED
             and admission.previous_membership == "join"
             and admission.membership != "join"
             and admission.room_id is not None
         ):
+            room_id = admission.room_id
+            reason = "control_client_departed"
+        else:
             return ReplyMembershipPreAdmission()
-        authorization_changed = self._memberships.mark_control_room_unready(
+        authorization_changed = self._memberships.mark_room_unready(
             config,
             runtime_paths,
-            admission.room_id,
-            reason="control_client_departed",
+            room_id,
+            reason=reason,
         )
         if authorization_changed:
             self._request_refresh()

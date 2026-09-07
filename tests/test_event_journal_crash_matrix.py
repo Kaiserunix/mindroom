@@ -36,7 +36,7 @@ from mindroom.event_journal import (
     EventKind,
 )
 from mindroom.event_journal.store import _DEFAULT_UNACKNOWLEDGED_LIMIT as _UNACKNOWLEDGED_BATCH
-from mindroom.matrix.journal_ingress import inbound_event, projected_event
+from mindroom.matrix.journal_ingress import _inbound_event, _projected_event
 from mindroom.matrix_delivery import MatrixDeliveryWorker, TurnHandoff
 from mindroom.pending_event_worker import PendingEventWorker
 from tests.conftest import CrashError, DiesAfterAcknowledgement, DiesAfterNextWriteCommit, ignore_delivered_projection
@@ -237,8 +237,8 @@ async def admit(store: PrincipalStore, event: nio.Event | None = None) -> None:
     """Admit one inbound message durably."""
     event = event or inbound()
     await store.admit(
-        inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-        projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
+        _inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+        _projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
     )
 
 

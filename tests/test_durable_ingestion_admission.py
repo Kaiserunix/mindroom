@@ -378,7 +378,7 @@ async def test_malformed_batch_has_no_pre_admission_or_journal_effects(
             session,
             principal,
             account_id=ACCOUNT,
-            before_admission=before_effects.append,
+            before_admission=lambda record, provenance: before_effects.append((record, provenance)),
         )
     with pytest.raises(IngestionBatchValidationError):
         await operation
@@ -450,7 +450,7 @@ async def test_live_grant_message_departure_hooks_keep_batch_order(
     allowed = False
     observed = []
 
-    def before(record: IngestionRecordAdmission) -> None:
+    def before(record: IngestionRecordAdmission, _provenance: nio.TimelineEventProvenance | None) -> None:
         nonlocal allowed
         if record.membership == "leave":
             allowed = False

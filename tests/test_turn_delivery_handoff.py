@@ -37,12 +37,13 @@ from mindroom.event_journal import (
 from mindroom.handled_turns import TurnRecord
 from mindroom.journal_dispatch import JournalCallbacks, JournalDispatcher
 from mindroom.matrix.client_delivery import DeliveredMatrixEvent, MatrixDeliveryFailure, MatrixDeliveryFailureKind
-from mindroom.matrix.journal_ingress import inbound_event, projected_event
+from mindroom.matrix.journal_ingress import _inbound_event, _projected_event
 from mindroom.matrix_delivery import MatrixDeliveryWorker, TurnHandoff
 from mindroom.message_target import MessageTarget
 from mindroom.pending_event_worker import PendingEventWorker
 from mindroom.turn_record import canonicalize_turn_record
 from tests.conftest import CrashError, DiesAfterNextWriteCommit, ignore_delivered_projection
+from tests.journal_helpers import admit_dispatch_event
 from tests.journal_membership_helpers import admit_room_membership
 from tests.test_live_message_coalescing import _make_bot
 
@@ -81,8 +82,8 @@ async def admit(store: PrincipalStore, *events: nio.Event) -> None:
     """Admit each event as pending semantic work, as live ingress would."""
     for event in events:
         await store.admit(
-            inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
-            projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
+            _inbound_event(ROOM, event, EventKind.MESSAGE, EventClass.ACTIONABLE),
+            _projected_event(ROOM, event, EventKind.MESSAGE, self_sender=BOT),
         )
 
 
@@ -101,8 +102,8 @@ async def admit_redaction(store: PrincipalStore, event_id: str, *, redacts: str)
     )
     assert isinstance(parsed, nio.Event)
     await store.admit(
-        inbound_event(ROOM, parsed, EventKind.REDACTION, EventClass.ACTIONABLE),
-        projected_event(ROOM, parsed, EventKind.REDACTION, self_sender=BOT),
+        _inbound_event(ROOM, parsed, EventKind.REDACTION, EventClass.ACTIONABLE),
+        _projected_event(ROOM, parsed, EventKind.REDACTION, self_sender=BOT),
     )
 
 
@@ -185,7 +186,6 @@ def _dispatcher(
 
     dispatcher = JournalDispatcher(
         store=journal(bot),
-        self_sender=BOT,
         callbacks=JournalCallbacks(
             on_message=on_message,
             on_media=cast("Any", unused),
@@ -683,7 +683,8 @@ class TestRedactedPendingTurnSources:
         source = text_event("$source")
         if not source_first:
             await admit_redaction(journal(bot), "$redaction", redacts="$source")
-        await dispatcher.admit_out_of_band(
+        await admit_dispatch_event(
+            dispatcher,
             nio.MatrixRoom(ROOM, BOT),
             source,
             EventKind.MESSAGE,
@@ -698,7 +699,6 @@ class TestRedactedPendingTurnSources:
         on_message.assert_not_awaited()
         on_redaction.assert_awaited_once()
         assert await pending_ids(bot) == []
-        assert dispatcher._live_events == {}
         assert (
             await bot._delivery_gateway.deps.outbox.load_matrix_delivery(
                 delivery_id="$source",

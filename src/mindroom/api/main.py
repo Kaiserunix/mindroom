@@ -46,7 +46,7 @@ from mindroom.knowledge.watch import KnowledgeSourceWatcher
 from mindroom.logging_config import get_logger
 from mindroom.matrix.decrypt_failure import e2ee_stats
 from mindroom.matrix.health import get_matrix_sync_health_snapshot
-from mindroom.orchestration.runtime import matrix_sync_cache_write_grace_seconds, matrix_sync_startup_timeout_seconds
+from mindroom.orchestration.runtime import matrix_ingestion_grace_seconds, matrix_sync_startup_timeout_seconds
 from mindroom.runtime_state import get_runtime_state
 from mindroom.workers.backend import maintain_workers
 from mindroom.workers.runtime import lease_configured_primary_worker_manager
@@ -725,7 +725,7 @@ async def health_check(request: Request) -> JSONResponse:
     runtime_paths = _api_runtime_paths(request)
     sync_health = get_matrix_sync_health_snapshot(
         startup_grace_seconds=matrix_sync_startup_timeout_seconds(runtime_paths),
-        cache_write_grace_seconds=matrix_sync_cache_write_grace_seconds(runtime_paths),
+        ingestion_grace_seconds=matrix_ingestion_grace_seconds(runtime_paths),
     )
 
     response: dict[str, object] = {

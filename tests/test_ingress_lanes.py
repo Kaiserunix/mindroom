@@ -38,6 +38,7 @@ from tests.conftest import (
     replace_turn_controller_deps,
     unwrap_extracted_collaborator,
 )
+from tests.journal_helpers import admit_dispatch_event
 from tests.test_live_message_coalescing import (
     _enqueue_for_dispatch,
     _image_event,
@@ -636,12 +637,11 @@ async def test_ignored_source_remains_owned_during_durable_settlement(
     )
     dispatcher = JournalDispatcher(
         store=journal_store.principal("agent@lane"),
-        self_sender="@lane:example.org",
         callbacks=callbacks,
         room_for_id=lambda _room_id: _room(),
     )
     event = _image_event(event_id=source_event_id)
-    await dispatcher.admit_out_of_band(_room(), event, EventKind.MEDIA, EventClass.ACTIONABLE)
+    await admit_dispatch_event(dispatcher, _room(), event, EventKind.MEDIA, EventClass.ACTIONABLE)
     await dispatcher.drain_once()
 
     # The gate still owns this source, so the media callback must not run and

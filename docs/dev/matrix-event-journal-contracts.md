@@ -47,6 +47,7 @@ Nio splits membership authorization barriers into singleton batches. The pump
 runs pre-admission hooks, commits, then runs post-admission hooks in vector order
 before acknowledging. Live membership post-hooks retry after failure even when
 the batch was already admitted; recovered membership never grants new authority.
+Recovered membership changes fail the affected room's reply grants closed before admission and request an authoritative roster refresh, including when gap recovery succeeds without a history-loss record.
 Ordinary semantic callbacks run only for newly admitted actionable events.
 Auxiliary nio callbacks and sync completion run at least once until acknowledgement
 and may repeat after a crash or callback failure.
