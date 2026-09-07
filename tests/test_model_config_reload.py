@@ -150,6 +150,7 @@ def _history_plan(config: Config, entity_name: str) -> ResolvedHistoryExecutionP
     )
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("context_only", [True, False])
 async def test_model_reload_updates_next_response_without_restarting_bots(
     runtime: _MultiAgentOrchestrator,
@@ -205,6 +206,7 @@ async def test_model_reload_updates_next_response_without_restarting_bots(
             assert after.destructive_compaction_available
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("model_field", ["model", "fallback_model"])
 @pytest.mark.parametrize("inherited", [True, False])
 async def test_compaction_model_reload_updates_effective_budgets(
@@ -249,6 +251,7 @@ async def test_compaction_model_reload_updates_effective_budgets(
             )
 
 
+@pytest.mark.asyncio
 async def test_context_window_reload_preserves_explicit_replay_cap(runtime: _MultiAgentOrchestrator) -> None:
     """Increasing provider capacity does not remove an authored, smaller replay cap."""
     old = runtime.config
