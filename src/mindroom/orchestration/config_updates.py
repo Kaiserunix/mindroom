@@ -275,6 +275,18 @@ def _changed_entity_construction_defaults(config: Config, new_config: Config) ->
     return set()
 
 
+def _entities_referencing_models(config: Config, model_names: set[str]) -> set[str]:
+    """Return entities using changed reply, compaction, or fallback model definitions."""
+    affected = set()
+    for entity_name, entry in {**config.agents, **config.teams}.items():
+        compaction = config.resolve_entity(entity_name).compaction_config
+        if model_names.intersection({entry.model, compaction.model, compaction.fallback_model}):
+            affected.add(entity_name)
+    if config.router.model in model_names:
+        affected.add(ROUTER_AGENT_NAME)
+    return affected
+
+
 def build_config_update_plan(
     *,
     current_config: Config,
@@ -291,6 +303,22 @@ def build_config_update_plan(
         agent_bots,
         changed_mcp_servers,
     )
+    changed_models = {
+        model_name
+        for model_name in set(current_config.models) | set(new_config.models)
+        if _config_entries_differ(current_config.models.get(model_name), new_config.models.get(model_name))
+    }
+    if changed_models:
+        model_affected_entities = (
+            (
+                _entities_referencing_models(current_config, changed_models)
+                | _entities_referencing_models(new_config, changed_models)
+            )
+            & existing_entities
+            & configured_entities
+        )
+        entities_to_restart |= model_affected_entities
+
     changed_entity_construction_prompts = _changed_entity_construction_prompts(current_config, new_config)
     if changed_entity_construction_prompts:
         prompt_affected_entities = existing_entities & configured_entities
