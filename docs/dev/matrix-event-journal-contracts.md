@@ -40,6 +40,7 @@ One journal transaction advances the consumer's `next_sequence` (starting at 1),
 Any failure, including pending delivery projection, rolls back the entire vector and its sequence advance.
 The consumer sequence is the sole batch-acceptance record; no separate receipt table is needed.
 Redelivery of the last admitted sequence retries ordered hooks without repeating semantic effects.
+Every acknowledged batch wakes semantic dispatch, including a retry whose journal transaction committed before the previous pump was interrupted.
 Earlier or skipped sequences are rejected.
 Empty completion batches advance the same sequence and must be acknowledged.
 
@@ -53,6 +54,8 @@ Auxiliary nio callbacks and sync completion run at least once until acknowledgem
 and may repeat after a crash or callback failure.
 Application joined-member lookups never write nio's room projection or its completeness flag; nio owns encryption recipient selection and room-key sharing.
 MindRoom caches lookup results separately for responder and display-name decisions, invalidating them on membership or history-loss records and projection changes while sharing concurrent requests within each room lifetime.
+Invitation authorization is checked after local membership queue and admission waits, immediately before handing the command to Nio; stale-position retries repeat that check.
+Once Nio accepts the durable membership intent, Nio owns its HTTP and recovery fate.
 
 Restored decrypted to-device events pass through the same current signed-device
 authentication helper as fresh events, using the original encrypted envelope.

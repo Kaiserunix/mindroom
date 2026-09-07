@@ -37,11 +37,13 @@ from mindroom.matrix.client_session import authenticate_to_device_event
 from mindroom.matrix.durable_ingestion import consume_one_ingestion_batch, validate_ingestion_batch
 from mindroom.matrix.journal_ingress import parse_journal_event
 from mindroom.matrix.to_device import AuthenticatedToDeviceEvent
+from mindroom.pending_event_worker import PendingEventWorker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from mindroom.event_journal import JournalEvent
     from mindroom.event_journal.backend import Transaction
 
 ACCOUNT = "@bot:example.org"
@@ -92,6 +94,81 @@ async def principal_for(store: EventJournalStore, stream: UUID) -> PrincipalStor
     consumer = await principal.load_or_create_ingestion_consumer(new_generation=uuid4())
     await principal.bind_ingestion_stream(generation=consumer.generation, stream_id=stream)
     return principal
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
+async def test_acknowledged_retry_wakes_an_idle_semantic_worker(
+    journal_database: Callable[[], EventJournalStore],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: type[BaseException],
+) -> None:
+    """Failure after commit must not strand work when replay acknowledges the batch."""
+    batch = SyncBatch(uuid4(), 1, (message("$interrupted"),))
+    principal = await principal_for(journal_database(), batch.stream_id)
+    session = Session(batch)
+    worker_idle = asyncio.Event()
+    pump_idle = asyncio.Event()
+    handled = asyncio.Event()
+
+    async def handle(_event: JournalEvent) -> bool:
+        handled.set()
+        return True
+
+    worker = PendingEventWorker(store=principal, handle=handle)
+    collect = worker._collect_dispatchable
+
+    async def collect_and_signal() -> tuple[dict[str, list[JournalEvent]], bool]:
+        result = await collect()
+        worker_idle.set()
+        return result
+
+    monkeypatch.setattr(worker, "_collect_dispatchable", collect_and_signal)
+
+    async def interrupt_after_commit(
+        _record: IngestionRecordAdmission,
+        _facts: AdmissionFacts,
+        _provenance: nio.TimelineEventProvenance | None,
+    ) -> None:
+        message = "interrupted after commit"
+        raise failure(message)
+
+    async def wait_for_work() -> None:
+        pump_idle.set()
+        await asyncio.Event().wait()
+
+    worker.start()
+    retry: asyncio.Task[None] | None = None
+    try:
+        await asyncio.wait_for(worker_idle.wait(), 1)
+        with pytest.raises(failure, match="interrupted after commit"):
+            await durable_ingestion.run_ingestion_pump(
+                session,
+                principal,
+                account_id=ACCOUNT,
+                wait_for_work=wait_for_work,
+                wake_semantic_dispatch=worker.wake,
+                after_admission=interrupt_after_commit,
+            )
+        assert await principal.is_pending("$interrupted")
+        assert session.acked == []
+        retry = asyncio.create_task(
+            durable_ingestion.run_ingestion_pump(
+                session,
+                principal,
+                account_id=ACCOUNT,
+                wait_for_work=wait_for_work,
+                wake_semantic_dispatch=worker.wake,
+            ),
+        )
+        await asyncio.wait_for(pump_idle.wait(), 1)
+        assert session.acked == [batch]
+        await asyncio.wait_for(handled.wait(), 1)
+    finally:
+        if retry is not None:
+            retry.cancel()
+            await asyncio.gather(retry, return_exceptions=True)
+        await worker.stop()
 
 
 @pytest.mark.asyncio

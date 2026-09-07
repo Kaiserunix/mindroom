@@ -31,7 +31,7 @@ from tests.test_event_journal_store import admit, interactive_edit, interactive_
 from tests.test_room_invites import _handle_invite, _live_router_invite_scenario, _pending_room_invites
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
     from pathlib import Path
 
     from nio.durable import DurableSync
@@ -240,6 +240,71 @@ async def test_failed_durable_join_retains_pending_invitation(
             await _handle_invite(bot, room, event)
         assert room.room_id in _pending_room_invites(config, ROUTER_AGENT_NAME)
         assert bot._room_lifecycle.decrypt_notice_is_fenced(room.room_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait_at", ["lock", "producer", "admission"])
+@pytest.mark.parametrize("replacement", [None, "@disallowed:localhost"])
+async def test_invite_authorization_is_rechecked_after_membership_waits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wait_at: str,
+    replacement: str | None,
+) -> None:
+    """A queued join cannot use an invitation withdrawn or replaced while it waited."""
+    config, bot, room, event = _live_router_invite_scenario(tmp_path)
+    assert room.inviter is not None
+    config.router.accept_invites = [room.inviter]
+    reached = asyncio.Event()
+    release = asyncio.Event()
+
+    async def change(room_id: str, target: str, *, is_authorized: Callable[[], bool] | None = None) -> bool:
+        if wait_at == "lock":
+            reached.set()
+        return await AgentBot._change_local_membership(bot, room_id, target, is_authorized=is_authorized)
+
+    bot._room_lifecycle.deps = replace(bot._room_lifecycle.deps, change_membership=change)
+    monkeypatch.setattr(bot._room_lifecycle, "_send_invite_welcome", AsyncMock())
+    async with _owned_session(bot) as session:
+        bot.client.invited_rooms[room.room_id] = room
+        request = AsyncMock(return_value=b"{}")
+        session._transport.request = request
+        if wait_at == "lock":
+            await bot._local_membership_lock.acquire()
+        elif wait_at == "producer":
+
+            async def wait_for_producer() -> None:
+                reached.set()
+                await release.wait()
+
+            monkeypatch.setattr(session, "wait_for_membership_idle", wait_for_producer)
+        else:
+
+            async def wait_for_admission() -> None:
+                reached.set()
+                await release.wait()
+
+            monkeypatch.setattr(session, "next_batch", wait_for_admission)
+        task = asyncio.create_task(_handle_invite(bot, room, event))
+        try:
+            await asyncio.wait_for(reached.wait(), 2)
+            if replacement is None:
+                bot.client.invited_rooms.pop(room.room_id)
+            else:
+                room.inviter = replacement
+            if wait_at == "lock":
+                bot._local_membership_lock.release()
+            release.set()
+            await asyncio.wait_for(task, 2)
+            request.assert_not_awaited()
+            assert room.room_id not in bot._room_lifecycle.invited_rooms
+            assert not bot._room_lifecycle.decrypt_notice_is_fenced(room.room_id)
+        finally:
+            release.set()
+            if bot._local_membership_lock.locked():
+                bot._local_membership_lock.release()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

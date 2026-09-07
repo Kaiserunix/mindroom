@@ -75,11 +75,15 @@ def _membership_transport_for_invite_business_tests(
         bot: AgentBot,
         room_id: str,
         target_membership: str,
+        *,
+        is_authorized: Callable[[], bool] | None = None,
     ) -> bool:
         client = bot.client
         assert client is not None
         if target_membership == "join":
             position = await bot.journal_principal().ingestion_membership_position(room_id)
+            if is_authorized is not None and not is_authorized():
+                return False
             client_rooms = client.rooms
             if (
                 isinstance(client_rooms, dict)

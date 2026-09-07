@@ -1905,13 +1905,20 @@ def install_runtime_journal_support(bot: RuntimeBot) -> RuntimeBot:
     production's durable gateway fail-closed when no session is attached.
     """
 
-    async def change_membership(room_id: str, target_membership: str) -> bool:
+    async def change_membership(
+        room_id: str,
+        target_membership: str,
+        *,
+        is_authorized: Callable[[], bool] | None = None,
+    ) -> bool:
         client = bot.client
         if client is None:
             msg = "Matrix client is not ready for test room membership work"
             raise RuntimeError(msg)
         if target_membership == "join":
             position = await bot.journal_principal().ingestion_membership_position(room_id)
+            if is_authorized is not None and not is_authorized():
+                return False
             rooms = client.rooms
             if (
                 isinstance(rooms, Mapping)

@@ -1225,6 +1225,8 @@ class AgentBot:
         self,
         room_id: str,
         target_membership: str,
+        *,
+        is_authorized: Callable[[], bool] | None = None,
     ) -> bool:
         """Serialize one local membership command while ingestion keeps draining."""
         session = self._ingestion_session
@@ -1239,6 +1241,7 @@ class AgentBot:
                 target_membership=target_membership,
                 read_position=self.journal_principal().ingestion_membership_position,
                 admission_progress=self._ingestion_admission_progress,
+                is_authorized=is_authorized,
             )
 
     async def leave_unconfigured_rooms(self) -> None:

@@ -200,7 +200,8 @@ async def run_ingestion_pump(
         if facts is None:
             await wait_for_work()
         else:
+            # A retry may be acknowledging work committed before the prior
+            # pump could notify its dispatcher. The journal decides what runs.
+            wake_semantic_dispatch()
             if after_ack is not None:
                 after_ack()
-            if facts.semantic_event_new:
-                wake_semantic_dispatch()

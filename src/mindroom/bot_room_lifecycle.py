@@ -58,7 +58,13 @@ class _SendRoomResponse(Protocol):
 class _ChangeRoomMembership(Protocol):
     """Execute one durable local membership action."""
 
-    def __call__(self, room_id: str, target_membership: str) -> Awaitable[bool]:
+    def __call__(
+        self,
+        room_id: str,
+        target_membership: str,
+        *,
+        is_authorized: Callable[[], bool] | None = None,
+    ) -> Awaitable[bool]:
         """Join or leave through the owned ingestion gateway."""
         ...
 
@@ -531,24 +537,17 @@ class BotRoomLifecycle:
                 await self._send_invite_welcome(room.room_id, sender)
                 self._forget_pending_room_invite(room.room_id)
                 return
-            if self._client_has_joined_room(room.room_id):
-                self._logger().debug("Invite already handled", room_id=room.room_id, sender=sender)
-                if not await self.deps.change_membership(room.room_id, "join"):
-                    msg = f"Failed to reconcile joined invited room {room.room_id}"
-                    raise RuntimeError(msg)
-                self._remember_invited_room(room.room_id)
-                await self._send_invite_welcome(room.room_id, sender)
-                self._forget_pending_room_invite(room.room_id)
-                return
-
             self._logger().info("Received invite", room_id=room.room_id, sender=sender)
-            await self._add_join_decrypt_notice_fence(room.room_id)
-            current_sender = self._allowed_current_inviter(room.room_id)
-            if current_sender is None:
-                await self._clear_join_decrypt_notice_fence(room.room_id)
-                return
-            sender = current_sender
-            if not await self.deps.change_membership(room.room_id, "join"):
+            if not self._client_has_joined_room(room.room_id):
+                await self._add_join_decrypt_notice_fence(room.room_id)
+
+            def invite_is_current() -> bool:
+                return self._allowed_current_inviter(room.room_id) == sender
+
+            if not await self.deps.change_membership(room.room_id, "join", is_authorized=invite_is_current):
+                if not invite_is_current():
+                    await self._clear_join_decrypt_notice_fence(room.room_id)
+                    return
                 # False includes stale position and exhausted HTTP retries;
                 # neither proves a terminal rejection of this invitation.
                 self._logger().error("Failed to join room", room_id=room.room_id)

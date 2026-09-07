@@ -30,6 +30,8 @@ The cutover abandons the old journal's unfinished work and local conversation pr
 Configuration, credentials, workspaces, memories, knowledge stores, and separate agent sessions remain in their existing stores.
 Matrix room messages remain on the homeserver, and accessible history can be fetched again when the required encryption keys are available.
 
+If you customized `MINDROOM_MATRIX_SYNC_CACHE_WRITE_GRACE_SECONDS`, replace it with `MINDROOM_MATRIX_INGESTION_GRACE_SECONDS`; the watchdog now bounds Nio ingestion progress instead of MindRoom's retired callback cache writes.
+
 ## Device recovery after the cutover
 
 Normal restarts reuse the existing Matrix device and durable stream.
