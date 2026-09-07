@@ -1927,7 +1927,12 @@ def install_runtime_journal_support(bot: RuntimeBot) -> RuntimeBot:
             ):
                 return True
             outcome = await client_room_admin_module.join_room(client, room_id)
-            return outcome is RoomJoinOutcome.JOINED or outcome is True
+            joined = outcome is RoomJoinOutcome.JOINED or outcome is True
+            if joined:
+                client.rooms[room_id] = nio.MatrixRoom(room_id, client.user_id)
+                if isinstance(client.invited_rooms, dict):
+                    client.invited_rooms.pop(room_id, None)
+            return joined
         if target_membership == "leave":
             return await matrix_rooms_module.leave_room(client, room_id)
         msg = f"Unsupported test room membership target: {target_membership}"
@@ -1937,7 +1942,7 @@ def install_runtime_journal_support(bot: RuntimeBot) -> RuntimeBot:
         bot._room_lifecycle.deps,
         change_membership=change_membership,
     )
-    bot._change_local_membership = change_membership  # type: ignore[method-assign]
+    bot.change_local_membership = change_membership  # type: ignore[method-assign]
     sync_bot_runtime_state(bot)
     return bot
 

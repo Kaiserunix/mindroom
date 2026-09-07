@@ -16,6 +16,7 @@ from nio.durable import DurableSyncConfig, RecordKind, SyncRecord
 from nio.durable.transport import HttpError
 
 from mindroom.bot import AgentBot
+from mindroom.bot_room_lifecycle import BotRoomLifecycle
 from mindroom.config.access import ResponderAccessConfig
 from mindroom.constants import ROUTER_AGENT_NAME
 from mindroom.event_journal import DeliveryStage, RoomMembershipPosition
@@ -230,8 +231,8 @@ async def test_failed_durable_join_retains_pending_invitation(
 ) -> None:
     """An ambiguous HTTP failure must retain both the invitation and decrypt fence."""
     config, bot, room, event = _live_router_invite_scenario(tmp_path)
-    bot._change_local_membership = AgentBot._change_local_membership.__get__(bot)
-    bot._room_lifecycle.deps = replace(bot._room_lifecycle.deps, change_membership=bot._change_local_membership)
+    bot.change_local_membership = AgentBot.change_local_membership.__get__(bot)
+    bot._room_lifecycle.deps = replace(bot._room_lifecycle.deps, change_membership=bot.change_local_membership)
     monkeypatch.setattr(bot._room_lifecycle, "_send_invite_welcome", AsyncMock())
     async with _owned_session(bot) as session:
         bot.client.invited_rooms[room.room_id] = room
@@ -261,7 +262,7 @@ async def test_invite_authorization_is_rechecked_after_membership_waits(
     async def change(room_id: str, target: str, *, is_authorized: Callable[[], bool] | None = None) -> bool:
         if wait_at == "lock":
             reached.set()
-        return await AgentBot._change_local_membership(bot, room_id, target, is_authorized=is_authorized)
+        return await AgentBot.change_local_membership(bot, room_id, target, is_authorized=is_authorized)
 
     bot._room_lifecycle.deps = replace(bot._room_lifecycle.deps, change_membership=change)
     monkeypatch.setattr(bot._room_lifecycle, "_send_invite_welcome", AsyncMock())
@@ -305,6 +306,79 @@ async def test_invite_authorization_is_rechecked_after_membership_waits(
                 bot._local_membership_lock.release()
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_at", ["persistence", "welcome"])
+@pytest.mark.parametrize("policy_allows_recovery", [True, False])
+async def test_joined_invitation_recovers_without_an_invite_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_at: str,
+    policy_allows_recovery: bool,
+) -> None:
+    """An accepted join survives unfinished app work and startup room cleanup."""
+    config, bot, room, event = _live_router_invite_scenario(tmp_path)
+    bot._room_lifecycle.deps = replace(
+        bot._room_lifecycle.deps,
+        change_membership=AgentBot.change_local_membership.__get__(bot),
+    )
+    failure = OSError("interrupted invitation completion")
+    if failure_at == "persistence":
+        monkeypatch.setattr(bot._room_lifecycle, "_remember_invited_room", MagicMock(side_effect=failure))
+    else:
+        monkeypatch.setattr(bot._room_lifecycle, "_send_invite_welcome", AsyncMock(side_effect=failure))
+    async with _owned_session(bot) as session:
+        bot.client.invited_rooms[room.room_id] = room
+        session._transport.request = AsyncMock(return_value=b"{}")
+        with pytest.raises(OSError, match="interrupted invitation completion"):
+            await _handle_invite(bot, room, event)
+        assert room.room_id in bot.client.rooms
+        assert room.room_id not in bot.client.invited_rooms
+        await consume_one_ingestion_batch(session, bot.journal_principal(), account_id=bot.agent_user.user_id)
+
+    config.router.accept_invites = policy_allows_recovery
+    bot._room_lifecycle = BotRoomLifecycle(bot._room_lifecycle.deps)
+    welcome = AsyncMock()
+    monkeypatch.setattr(bot._room_lifecycle, "_send_invite_welcome", welcome)
+    monkeypatch.setattr("mindroom.bot_room_lifecycle.get_joined_rooms", AsyncMock(return_value=[room.room_id]))
+    async with _owned_session(bot) as session:
+        request = AsyncMock()
+        session._transport.request = request
+        assert room.room_id in bot.client.rooms
+        assert room.room_id not in bot.client.invited_rooms
+        # Startup computes cleanup before welcome admission opens.
+        assert await bot._room_lifecycle._rooms_to_leave() == ([] if policy_allows_recovery else [room.room_id])
+        welcome.assert_not_awaited()
+        await bot._room_lifecycle.reconcile_pending_invites()
+        assert (room.room_id in bot._room_lifecycle.invited_rooms) is policy_allows_recovery
+        assert welcome.await_count == int(policy_allows_recovery)
+        assert (room.room_id not in _pending_room_invites(config, ROUTER_AGENT_NAME)) is policy_allows_recovery
+        request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invite_completion_keeps_a_replacement_pending_inviter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Finishing one welcome must not erase a later invitation's durable work."""
+    config, bot, room, event = _live_router_invite_scenario(tmp_path)
+    bot._room_lifecycle.deps = replace(
+        bot._room_lifecycle.deps,
+        change_membership=AgentBot.change_local_membership.__get__(bot),
+    )
+    replacement = "@replacement:localhost"
+
+    async def welcome(_room_id: str, _sender: str) -> None:
+        bot._room_lifecycle.record_pending_room_invite(room.room_id, replacement)
+
+    monkeypatch.setattr(bot._room_lifecycle, "_send_invite_welcome", welcome)
+    async with _owned_session(bot) as session:
+        bot.client.invited_rooms[room.room_id] = room
+        session._transport.request = AsyncMock(return_value=b"{}")
+        await _handle_invite(bot, room, event)
+        assert _pending_room_invites(config, ROUTER_AGENT_NAME) == {room.room_id: replacement}
 
 
 @pytest.mark.asyncio
@@ -482,7 +556,7 @@ async def test_startup_cleanup_leaves_room_before_first_membership_observation(
     principal = bot.journal_principal()
     bot._room_lifecycle.deps = replace(
         bot._room_lifecycle.deps,
-        change_membership=AgentBot._change_local_membership.__get__(bot),
+        change_membership=AgentBot.change_local_membership.__get__(bot),
     )
     monkeypatch.setattr("mindroom.matrix.rooms.is_dm_room", AsyncMock(return_value=False))
     first_poll = asyncio.Event()
@@ -547,7 +621,7 @@ async def test_entity_removal_leaves_with_retained_input_before_closing_stores(
     await _retain_membership_before_admission(bot, "join")
     bot._room_lifecycle.deps = replace(
         bot._room_lifecycle.deps,
-        change_membership=AgentBot._change_local_membership.__get__(bot),
+        change_membership=AgentBot.change_local_membership.__get__(bot),
     )
     monkeypatch.setattr("mindroom.matrix.rooms.is_dm_room", AsyncMock(return_value=False))
     monkeypatch.setattr(bot, "_on_ingestion_frame_completion", AsyncMock())
@@ -589,8 +663,8 @@ async def test_removal_cleanup_bounds_wait_for_stopped_ingestion(
     """Unrecoverable retained input must not leave removal waiting forever."""
     bot = _agent_bot(tmp_path)
     await _retain_membership_before_admission(bot, "join")
-    bot._change_local_membership = AgentBot._change_local_membership.__get__(bot)
-    bot._room_lifecycle.deps = replace(bot._room_lifecycle.deps, change_membership=bot._change_local_membership)
+    bot.change_local_membership = AgentBot.change_local_membership.__get__(bot)
+    bot._room_lifecycle.deps = replace(bot._room_lifecycle.deps, change_membership=bot.change_local_membership)
     monkeypatch.setattr("mindroom.matrix.rooms.is_dm_room", AsyncMock(return_value=False))
     async with _owned_session(bot) as session:
         assert bot.client is not None
@@ -628,7 +702,7 @@ async def test_startup_reconciles_membership_saved_before_application_admission(
     configured_setup = AsyncMock()
     bot._room_lifecycle.deps = replace(
         bot._room_lifecycle.deps,
-        change_membership=AgentBot._change_local_membership.__get__(bot),
+        change_membership=AgentBot.change_local_membership.__get__(bot),
         on_configured_room_joined=configured_setup,
     )
     monkeypatch.setattr("mindroom.matrix.rooms.is_dm_room", AsyncMock(return_value=False))

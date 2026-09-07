@@ -444,6 +444,7 @@ class _MultiAgentOrchestrator:
                 runtime_paths=self.runtime_paths,
                 config_provider=lambda: self.config,
                 bot_provider=lambda entity_name: self.agent_bots.get(entity_name),
+                response_admission_gate=self._response_admission_gate,
             ),
         )
         self._script_runtime = build_script_runtime(
@@ -624,6 +625,20 @@ class _MultiAgentOrchestrator:
                 return False
 
         return await bot.recover_approval_final(continuation.approval_id)
+
+    async def leave_matrix_room(self, agent_name: str, room_id: str) -> bool:
+        """Route dashboard departures through the current bot's durable membership owner."""
+        if not self._response_admission_gate.admit():
+            msg = "MindRoom is starting or reloading; retry the room departure"
+            raise RuntimeError(msg)
+        try:
+            bot = self.agent_bots.get(agent_name)
+            if bot is None or not bot.running or bot.client is None:
+                msg = f"No running Matrix owner for {agent_name}"
+                raise RuntimeError(msg)
+            return await bot.change_local_membership(room_id, "leave")
+        finally:
+            self._response_admission_gate.release()
 
     def _bind_response_admission_gate(self, bot: AgentBot | TeamBot) -> None:
         """Share the orchestrator-owned response admission gate with one managed bot."""
@@ -2601,12 +2616,18 @@ async def _run_api_server(
     knowledge_refresh_scheduler: KnowledgeRefreshScheduler | None = None,
     script_runtime: ScriptRuntimeLifecycle | None = None,
     shutdown_requested: asyncio.Event | None = None,
+    *,
+    thread_export_runner: WorkspaceThreadExportRunner | None = None,
+    leave_matrix_room: Callable[[str, str], Awaitable[bool]] | None = None,
 ) -> None:
     """Run the bundled dashboard/API server as an asyncio task."""
     from mindroom.api import main as api_main  # noqa: PLC0415
 
     api_server = _EmbeddedApiServerContext(host=host, port=port)
     api_main.initialize_api_app(api_main.app, runtime_paths)
+    api_state = api_main.config_lifecycle.app_state(api_main.app)
+    api_state.thread_export_runner = thread_export_runner
+    api_state.leave_matrix_room = leave_matrix_room
     if script_runtime is not None:
         api_main.bind_script_runtime(
             api_main.app,
@@ -2636,6 +2657,8 @@ async def _run_api_server(
         except SystemExit as exc:
             _raise_embedded_api_server_exit(api_server, reason="server.serve() raised SystemExit", cause=exc)
     finally:
+        api_state.thread_export_runner = None
+        api_state.leave_matrix_room = None
         if script_runtime is not None:
             await script_runtime.unbind_api()
             api_main.unbind_script_runtime(api_main.app)
@@ -3012,6 +3035,8 @@ async def main(
                     orchestrator.knowledge_refresh_scheduler,
                     orchestrator.script_runtime,
                     shutdown_requested,
+                    thread_export_runner=orchestrator._thread_export_runner,
+                    leave_matrix_room=orchestrator.leave_matrix_room,
                 ),
                 name="api_server",
             )

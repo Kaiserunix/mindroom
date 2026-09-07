@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import ssl as ssl_module
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
@@ -308,6 +308,26 @@ def _create_matrix_client(
     return client
 
 
+def create_matrix_http_client(
+    homeserver: str,
+    runtime_paths: RuntimePaths,
+    user_id: str,
+    *,
+    http_headers: Mapping[str, str] | None = None,
+) -> nio.AsyncClient:
+    """Create an HTTP-only client that cannot open the managed crypto store."""
+    runtime_paths = require_runtime_paths_arg(runtime_paths)
+    client = MindRoomAsyncClient(
+        homeserver,
+        user_id,
+        store_path=None,
+        config=replace(matrix_client_config(http_headers=http_headers), encryption_enabled=False),
+        ssl=maybe_ssl_context(homeserver, runtime_paths=runtime_paths),
+    )
+    client.user_id = user_id
+    return client
+
+
 def create_authenticated_client(
     homeserver: str,
     user_id: str,
@@ -519,6 +539,7 @@ __all__ = [
     "PermanentMatrixStartupError",
     "authenticate_to_device_event",
     "create_authenticated_client",
+    "create_matrix_http_client",
     "login",
     "login_flows",
     "login_with_token",

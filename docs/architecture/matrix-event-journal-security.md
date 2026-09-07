@@ -169,3 +169,12 @@ SQL structure is authored only from fixed internal constants and controlled frag
 Both rewrites are plain string substitution, so both refuse a statement that places their marker adjacent to a string literal rather than trusting that no statement does.
 
 Caller-provided values are bound by the driver in every case and are never formatted into SQL.
+
+### Auxiliary Matrix operations
+
+Dashboard room reads, schedule state operations, and avatar updates use saved access tokens on HTTP-only clients with encryption disabled and no store path.
+They never provision an account, renew credentials, or open the owned crypto store.
+Dashboard departures use the running bot's serialized durable membership gateway.
+CLI thread exports require the running API and borrow the same clients and principal-bound readers used by workspace exports.
+The CLI sends its config and storage paths so the API can reject a request aimed at a different installation before writing files.
+An export holds existing runtime replacement admission, and cancellation drains its own hydration tasks without closing borrowed clients or journals.

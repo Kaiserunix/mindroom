@@ -35,7 +35,7 @@ DEVICE = "DEVICE"
 def _credential_http(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Replace only authentication HTTP; retain real owned stores and persistence."""
     requested_devices: list[str] = []
-    create = _owned_session._create_credential_client
+    create = _owned_session.create_matrix_http_client
 
     def client(homeserver: str, runtime_paths: RuntimePaths, user_id: str, **kwargs: object) -> nio.AsyncClient:
         temporary = create(homeserver, runtime_paths, user_id, **kwargs)
@@ -58,7 +58,7 @@ def _credential_http(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         )
         return temporary
 
-    monkeypatch.setattr(_owned_session, "_create_credential_client", client)
+    monkeypatch.setattr(_owned_session, "create_matrix_http_client", client)
     monkeypatch.setattr(users, "ensure_agent_cross_signing", AsyncMock())
     monkeypatch.setattr(MindRoomAsyncClient, "set_displayname", AsyncMock())
 
@@ -249,14 +249,14 @@ async def test_failed_restore_preserves_binding_and_credentials(
             "wrong_device": nio.WhoamiResponse(USER, "OTHER", False),
             "wrong_user": nio.WhoamiResponse("@other:localhost", DEVICE, False),
         }
-        create = _owned_session._create_credential_client
+        create = _owned_session.create_matrix_http_client
 
         def credential_client(*args: object, **kwargs: object) -> nio.AsyncClient:
             client = create(*args, **kwargs)
             monkeypatch.setattr(client, "whoami", AsyncMock(return_value=responses[failure]))
             return client
 
-        monkeypatch.setattr(_owned_session, "_create_credential_client", credential_client)
+        monkeypatch.setattr(_owned_session, "create_matrix_http_client", credential_client)
         with pytest.raises(ValueError, match="Matrix") as error:
             await users.login_agent_owned_session(
                 "https://example.org",

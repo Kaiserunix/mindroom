@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     from nio.responses import Response
 
 
-_DURABLE_MEMBERSHIP_GATEWAY = AgentBot._change_local_membership
+_DURABLE_MEMBERSHIP_GATEWAY = AgentBot.change_local_membership
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +94,9 @@ def _membership_transport_for_invite_business_tests(
                 return True
             joined = await client_room_admin.join_room(client, room_id)
             if joined is RoomJoinOutcome.JOINED:
+                client.rooms[room_id] = nio.MatrixRoom(room_id, client.user_id)
+                if isinstance(client.invited_rooms, dict):
+                    client.invited_rooms.pop(room_id, None)
                 await admit_room_membership(bot.journal_principal(), room_id, "join")
                 return True
             return False
@@ -103,7 +106,7 @@ def _membership_transport_for_invite_business_tests(
             await admit_room_membership(bot.journal_principal(), room_id, "leave", source=DepartureSource.LOCAL)
         return left
 
-    monkeypatch.setattr(AgentBot, "_change_local_membership", change_membership)
+    monkeypatch.setattr(AgentBot, "change_local_membership", change_membership)
 
 
 def _invited_rooms_path(config: Config, agent_name: str) -> Path:
@@ -1452,7 +1455,7 @@ async def test_router_departure_allows_fresh_reinvite(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A room departure must rejoin even when nio keeps the old room cached."""
+    """A new invitation after Nio removes a departed room can join again."""
     config = bind_runtime_paths(
         Config(
             router=RouterConfig(model="default", accept_invites=True),
@@ -1489,7 +1492,7 @@ async def test_router_departure_allows_fresh_reinvite(
     install_send_response_mock(bot, send_response)
 
     await _handle_invite(bot, room, event)
-    bot.client.rooms[room_id] = MagicMock()
+    bot.client.rooms.pop(room_id)
     bot._room_lifecycle.forget_invited_room(room_id)
     await admit_room_membership(bot.journal_principal(), room_id, "leave")
     await _handle_invite(bot, room, event)

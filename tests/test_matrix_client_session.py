@@ -506,7 +506,7 @@ async def test_password_credentials_use_storeless_client_and_close_before_return
     create_temporary = Mock(return_value=temporary)
     monkeypatch.setattr(
         _owned_session,
-        "_create_credential_client",
+        "create_matrix_http_client",
         create_temporary,
         raising=False,
     )
@@ -574,7 +574,7 @@ async def test_password_credentials_close_temporary_client_on_failure_or_cancel(
     )
     monkeypatch.setattr(
         _owned_session,
-        "_create_credential_client",
+        "create_matrix_http_client",
         Mock(return_value=temporary),
         raising=False,
     )
@@ -621,7 +621,7 @@ async def test_restored_credentials_verify_identity_storeless_and_close(
     create_temporary = Mock(return_value=temporary)
     monkeypatch.setattr(
         _owned_session,
-        "_create_credential_client",
+        "create_matrix_http_client",
         create_temporary,
     )
     runtime_paths = RuntimePaths(
@@ -1057,7 +1057,7 @@ async def test_credential_renewal_requests_the_existing_device(tmp_path: Path, m
         env_path=tmp_path / ".env",
         storage_root=tmp_path / "data",
     )
-    temporary = _owned_session._create_credential_client("https://example.org", runtime_paths, "@bot:example.org")
+    temporary = _owned_session.create_matrix_http_client("https://example.org", runtime_paths, "@bot:example.org")
     requested_devices = []
 
     async def login(_password: str) -> nio.LoginResponse:
@@ -1065,7 +1065,7 @@ async def test_credential_renewal_requests_the_existing_device(tmp_path: Path, m
         return nio.LoginResponse("@bot:example.org", "DEVICE", "renewed-token")
 
     monkeypatch.setattr(temporary, "login", login)
-    monkeypatch.setattr(_owned_session, "_create_credential_client", lambda *_args, **_kwargs: temporary)
+    monkeypatch.setattr(_owned_session, "create_matrix_http_client", lambda *_args, **_kwargs: temporary)
     credentials = await _owned_session.login_password_credentials(
         "https://example.org",
         "@bot:example.org",
@@ -1091,7 +1091,7 @@ async def test_restore_only_renews_a_soft_logged_out_device(
         env_path=tmp_path / ".env",
         storage_root=tmp_path / "data",
     )
-    temporary = _owned_session._create_credential_client("https://example.org", runtime_paths, "@bot:example.org")
+    temporary = _owned_session.create_matrix_http_client("https://example.org", runtime_paths, "@bot:example.org")
     monkeypatch.setattr(
         temporary,
         "whoami",
@@ -1103,7 +1103,7 @@ async def test_restore_only_renews_a_soft_logged_out_device(
             ),
         ),
     )
-    monkeypatch.setattr(_owned_session, "_create_credential_client", lambda *_args, **_kwargs: temporary)
+    monkeypatch.setattr(_owned_session, "create_matrix_http_client", lambda *_args, **_kwargs: temporary)
     restore = _owned_session.restore_credentials(
         "https://example.org",
         "@bot:example.org",

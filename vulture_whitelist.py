@@ -348,3 +348,5 @@ _.upsert_sessions  # agno BaseDb interface method, overridden to keep the owner 
 _.ns_resolver  # pydantic ValidateCallWrapper attribute reset by the patch (src/mindroom/agno_tool_wrapper_patch.py)
 _.runs_from_rows  # agno SqliteDb calls it on the run-object cache (src/mindroom/agent_storage.py)
 _enable_foreign_keys  # SQLAlchemy connect listener (src/mindroom/agent_storage.py)
+
+export_threads  # FastAPI endpoint (src/mindroom/api/thread_exports.py)

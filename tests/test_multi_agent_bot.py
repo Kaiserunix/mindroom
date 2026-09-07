@@ -813,9 +813,9 @@ class TestAgentBot(AgentBotTestBase):
         bot.journal_principal = MagicMock(return_value=principal)
         bot._ingestion_session = session
 
-        assert await bot._change_local_membership(room_id, "join") is True
-        assert await bot._change_local_membership(room_id, "join") is True
-        assert await bot._change_local_membership(room_id, "join") is True
+        assert await bot.change_local_membership(room_id, "join") is True
+        assert await bot.change_local_membership(room_id, "join") is True
+        assert await bot.change_local_membership(room_id, "join") is True
 
         operation_id = UUID("1ffbf4c2-3f57-50dc-9dd1-5f0e76fad4e8")
         assert session.change_membership.await_args_list == [
@@ -929,14 +929,14 @@ class TestAgentBot(AgentBotTestBase):
         owned_journal = bot._own_journal
         assert owned_journal is not None
         try:
-            assert await bot._change_local_membership(room_id, "leave") is True
+            assert await bot.change_local_membership(room_id, "leave") is True
             await admit_lifecycle(
                 source=DepartureSource.REPORTED,
                 previous_membership="leave",
                 membership="join",
                 previous_epoch=1,
             )
-            assert await bot._change_local_membership(room_id, "leave") is True
+            assert await bot.change_local_membership(room_id, "leave") is True
 
             assert session.change_membership.await_args_list == [
                 call(

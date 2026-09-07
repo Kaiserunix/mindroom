@@ -26,6 +26,7 @@ from mindroom.matrix._owned_session import (
 from mindroom.matrix.client_session import (
     DEFAULT_MATRIX_SYNC_STORAGE,
     MatrixSyncStorage,
+    create_matrix_http_client,
     login,
     matrix_client,
     matrix_startup_error,
@@ -185,6 +186,22 @@ def load_agent_user(agent_name: str, runtime_paths: RuntimePaths) -> AgentMatrix
         device_id=credentials["device_id"],
         access_token=credentials["access_token"],
     )
+
+
+def create_agent_http_client(agent_name: str, runtime_paths: RuntimePaths) -> nio.AsyncClient:
+    """Use saved account credentials for HTTP without owning crypto or renewing login."""
+    agent_user = load_agent_user(agent_name, runtime_paths)
+    if agent_user is None or not agent_user.access_token:
+        msg = f"An authenticated Matrix account for {agent_name!r} is required; start MindRoom first"
+        raise ValueError(msg)
+    client = create_matrix_http_client(
+        runtime_matrix_homeserver(runtime_paths),
+        runtime_paths,
+        agent_user.user_id,
+    )
+    client.access_token = agent_user.access_token
+    client.device_id = agent_user.device_id or ""
+    return client
 
 
 def _save_agent_credentials(

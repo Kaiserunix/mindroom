@@ -11,7 +11,9 @@ import pytest
 
 from mindroom.config.agent import AgentConfig, AgentPrivateConfig, AgentThreadExportConfig
 from mindroom.config.main import Config
+from mindroom.event_journal import EventJournalStore
 from mindroom.matrix.identity import MatrixID
+from mindroom.response_admission import ResponseAdmissionGate
 from mindroom.runtime_resolution import resolve_agent_runtime
 from mindroom.thread_export.models import ThreadExportAccumulator, ThreadExportRoom, ThreadExportTarget
 from mindroom.thread_export.storage import _ROOT_MARKER_FILENAME, write_thread_payload
@@ -87,6 +89,7 @@ def _runner(config: Config, bots: dict[str, _ThreadExportBot]) -> WorkspaceThrea
             runtime_paths=runtime_paths_for(config),
             config_provider=lambda: config,
             bot_provider=bots.get,
+            response_admission_gate=ResponseAdmissionGate(),
             debounce_seconds=0,
         ),
     )
@@ -641,3 +644,60 @@ async def test_unreadable_private_identity_clears_that_instance_and_keeps_the_pa
         ("@mindroom_code:localhost",),
     ]
     assert not existing_thread.exists()
+
+
+async def test_manual_export_borrows_live_owner_and_reserves_reload_admission(tmp_path: Path) -> None:
+    """Administrative export uses the exact live client/principal and releases admission."""
+    config = _config(tmp_path, {})
+    write_thread_export_matrix_state(tmp_path)
+    journal = EventJournalStore.open_sqlite(tmp_path / "borrowed-journal.db")
+    principal = journal.principal("runtime-owned-principal")
+    client = Mock(close=AsyncMock())
+    bot = _FakeBot("@mindroom_router:localhost", client=client, principal=principal)
+    runner = _runner(config, _bots(bot))
+    gate = runner._deps.response_admission_gate
+
+    async def export_source(**kwargs: object) -> tuple[ThreadExportAccumulator, ...]:
+        assert gate.in_flight_response_count == 1
+        assert kwargs["client"] is client
+        reader = kwargs["reader"]
+        assert reader.completeness is principal
+        assert reader.reader.store is principal
+        assert reader.reader.hydrator.self_sender == bot.user_id
+        return tuple(ThreadExportAccumulator(target=target, rooms_exported=1) for target in kwargs["targets"])
+
+    runner.start()
+    try:
+        with patch("mindroom.thread_export.service.export_threads_for_targets_for_client", side_effect=export_source):
+            stats = await runner.export_once()
+        assert stats.rooms_exported == 1
+        assert gate.in_flight_response_count == 0
+        client.close.assert_not_awaited()
+        assert await principal.load_event("$missing") is None
+        gate.close()
+        with pytest.raises(RuntimeError, match="ready"):
+            await runner.export_once()
+        assert gate.in_flight_response_count == 0
+    finally:
+        await runner.stop()
+        await journal.close()
+    with pytest.raises(RuntimeError, match="running"):
+        await runner.export_once()
+
+
+async def test_manual_export_preserves_previous_files_when_owner_is_unavailable(tmp_path: Path) -> None:
+    """Owner loss is a failed pass, never a reason to acquire another client."""
+    config = _config(tmp_path, {})
+    write_thread_export_matrix_state(tmp_path)
+    output = tmp_path / "manual-exports"
+    prior = _write_owned_export(output)
+    runner = _runner(config, {})
+    runner.start()
+    try:
+        stats = await runner.export_once(output_dir=output)
+        assert stats.failures == 2
+        assert all("No running Matrix owner for router" in item.error for item in stats.failed_items)
+        assert prior.exists()
+        assert runner._deps.response_admission_gate.in_flight_response_count == 0
+    finally:
+        await runner.stop()

@@ -9,10 +9,9 @@ of -- the backend is one process behind one writer -- so running them there
 would prove only that the fixture took turns. Both take the PostgreSQL-only
 ``rival_stores`` fixture, which is where that is spelled out.
 
-SQLite does get a second connection, and not from a fixture: ``mindroom threads
-export`` is another process with another writer on the same file. That is the
-one thing here no object can stage, so ``TestCrossProcessWriters`` spawns a real
-interpreter to be it.
+SQLite contention across processes needs a separate interpreter, which
+``TestCrossProcessWriters`` spawns to verify the database-level busy timeout.
+CLI exports now use the running API and do not create a second writer.
 """
 
 from __future__ import annotations
@@ -4672,11 +4671,8 @@ async def rival_stores(postgres_journal_url: str) -> AsyncGenerator[RivalStores,
     Two SQLite stores in one process are two queues onto the same serialized
     write, so racing them here would only prove something about the fixture.
 
-    Not because SQLite has no second connection to race -- it has one whenever
-    ``mindroom threads export`` is running, which is its own process with its
-    own writer. That race is real, and it is not this fixture's to stage: it
-    needs a second interpreter rather than a second object, which is what
-    ``TestCrossProcessWriters`` spawns.
+    SQLite contention between independent processes needs a second interpreter,
+    which is what ``TestCrossProcessWriters`` spawns.
 
     Only the stores carry the application name. The connection that holds the
     row and the one that watches for waiters use the bare DSN, so neither can
@@ -4935,11 +4931,8 @@ class TestAFenceCannotBeSteppedOverByAConcurrentWalk:
         any implementation declines. This half is what happens when the fence
         has not committed yet.
 
-        Two writers on one database is the deployed shape, not a contrivance:
-        `mindroom threads export` opens the running install's journal in its own
-        process and runs its own `ConversationHydrator` against it, so the store
-        lock that serializes writes inside one process orders nothing between
-        them. Under ``READ COMMITTED`` the walk's plain epoch ``SELECT`` saw the
+        Independent writer connections must preserve the epoch boundary even
+        without a process-local lock. Under ``READ COMMITTED``, a plain ``SELECT`` saw the
         membership it expected, the fence then deleted every row committed at
         that instant, and the walk's rows landed behind it -- a conversation
         from a membership the bot has left, projected under an epoch no reader
@@ -8690,13 +8683,9 @@ asyncio.run(main())
 class TestCrossProcessWriters:
     """What a second OS process writing this journal does to the one beside it.
 
-    The export is that process. It opens the bot's journal from its own
-    interpreter and hydrates through it, so the single-writer queue -- which is
-    per process -- is not between them. The busy timeout is, and these are the
-    tests that say what that buys, because until they existed the timeout was
-    load-bearing and unexercised: every other concurrency test here shares one
-    interpreter, where the queue makes the writers take turns before SQLite is
-    ever asked to.
+    A process-local writer queue cannot serialize independent interpreters.
+    These tests exercise SQLite's busy timeout with a real second writer;
+    administrative exports themselves now run within the bot process.
     """
 
     @staticmethod
@@ -8737,7 +8726,7 @@ class TestCrossProcessWriters:
 
         Entering WAL is the one statement SQLite will not run the busy handler
         for, so before this the ten-second timeout the rest of the backend
-        relies on was zero here: an export pass that started while the bot was
+        relies on was zero here: another process that started while the bot was
         still creating the database died on the spot, in single-digit
         milliseconds, having waited for nothing.
 
@@ -8763,7 +8752,7 @@ class TestCrossProcessWriters:
             await store.close()
 
     async def test_admission_survives_a_write_lock_another_process_holds(self, tmp_path: Path) -> None:
-        """A bot admits through an export's write, late rather than never.
+        """Admission waits through another process's write lock.
 
         The guarantee the backend actually offers two processes, stated where
         it can be checked: contention delays an admission for as long as the

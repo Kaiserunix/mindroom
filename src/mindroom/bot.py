@@ -489,7 +489,7 @@ class AgentBot:
                 get_logger=lambda: self.logger,
                 get_configured_rooms=lambda: self.rooms,
                 send_response=send_room_lifecycle_response,
-                change_membership=self._change_local_membership,
+                change_membership=self.change_local_membership,
                 admit_response=lambda: admitted_response_decision(
                     self.admission_gate,
                     self.wait_for_admission_or_shutdown,
@@ -1221,7 +1221,7 @@ class AgentBot:
         if self._first_sync_done:
             self._maybe_start_deferred_overdue_task_drain()
 
-    async def _change_local_membership(
+    async def change_local_membership(
         self,
         room_id: str,
         target_membership: str,

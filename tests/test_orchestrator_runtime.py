@@ -996,7 +996,12 @@ class TestAgentBot(AgentBotTestBase):
             _knowledge_refresh_scheduler: object,
             _script_runtime: object,
             shutdown_requested: asyncio.Event | None,
+            *,
+            thread_export_runner: object,
+            leave_matrix_room: object,
         ) -> None:
+            assert thread_export_runner is mock_orchestrator._thread_export_runner
+            assert leave_matrix_room == mock_orchestrator.leave_matrix_room
             assert shutdown_requested is not None
             shutdown_requested.set()
             try:
@@ -1072,7 +1077,12 @@ class TestAgentBot(AgentBotTestBase):
             _knowledge_refresh_scheduler: object,
             _script_runtime: object,
             shutdown_requested: asyncio.Event | None,
+            *,
+            thread_export_runner: object,
+            leave_matrix_room: object,
         ) -> None:
+            assert thread_export_runner is mock_orchestrator._thread_export_runner
+            assert leave_matrix_room == mock_orchestrator.leave_matrix_room
             assert shutdown_requested is not None
             shutdown_requested.set()
             api_shutdown_started.set()
@@ -1138,7 +1148,12 @@ class TestAgentBot(AgentBotTestBase):
             _knowledge_refresh_scheduler: object,
             _script_runtime: object,
             shutdown_requested: asyncio.Event | None,
+            *,
+            thread_export_runner: object,
+            leave_matrix_room: object,
         ) -> None:
+            assert thread_export_runner is mock_orchestrator._thread_export_runner
+            assert leave_matrix_room == mock_orchestrator.leave_matrix_room
             assert shutdown_requested is not None
             shutdown_requested.set()
 
@@ -5048,3 +5063,31 @@ async def test_shutdown_must_stop_startup_before_releasing_resources(
         stall_detector=None,
     )
     assert acquired_after_teardown == [], "Startup acquired new runtime resources after shutdown began"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_departure_uses_live_membership_owner(tmp_path: Path) -> None:
+    """A dashboard departure shares the current bot's gateway and replacement gate."""
+    paths = resolve_runtime_paths(config_path=tmp_path / "config.yaml", storage_path=tmp_path / "data", process_env={})
+    orchestrator = _MultiAgentOrchestrator(runtime_paths=paths)
+    gate = orchestrator._response_admission_gate
+
+    async def change_membership(room_id: str, target: str) -> bool:
+        assert gate.in_flight_response_count == 1
+        assert (room_id, target) == ("!room:localhost", "leave")
+        return True
+
+    bot = MagicMock(running=True, change_local_membership=AsyncMock(side_effect=change_membership))
+    orchestrator.agent_bots["general"] = bot
+    assert await orchestrator.leave_matrix_room("general", "!room:localhost")
+    assert gate.in_flight_response_count == 0
+    bot.change_local_membership.assert_awaited_once_with("!room:localhost", "leave")
+    gate.close()
+    with pytest.raises(RuntimeError, match="starting or reloading"):
+        await orchestrator.leave_matrix_room("general", "!room:localhost")
+    assert bot.change_local_membership.await_count == 1
+    gate.reopen()
+    bot.running = False
+    with pytest.raises(RuntimeError, match="No running Matrix owner"):
+        await orchestrator.leave_matrix_room("general", "!room:localhost")
+    assert gate.in_flight_response_count == 0

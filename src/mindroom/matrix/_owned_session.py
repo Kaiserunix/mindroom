@@ -15,6 +15,7 @@ from mindroom.event_journal.models import IngestionConsumer
 from mindroom.logging_config import get_logger
 from mindroom.matrix.client_session import (
     MindRoomAsyncClient,
+    create_matrix_http_client,
     matrix_client_config,
     matrix_startup_error,
     maybe_ssl_context,
@@ -80,24 +81,6 @@ def _raise_owned_factory_value_error(message: str) -> NoReturn:
     raise ValueError(message)
 
 
-def _create_credential_client(
-    homeserver: str,
-    runtime_paths: RuntimePaths,
-    user_id: str,
-    *,
-    http_headers: Mapping[str, str] | None = None,
-) -> nio.AsyncClient:
-    """Create the temporary HTTP-only client used before any store lease."""
-    runtime_paths = require_runtime_paths_arg(runtime_paths)
-    return MindRoomAsyncClient(
-        homeserver,
-        user_id,
-        store_path=None,
-        config=matrix_client_config(http_headers=http_headers),
-        ssl=maybe_ssl_context(homeserver, runtime_paths=runtime_paths),
-    )
-
-
 async def login_password_credentials(
     homeserver: str,
     user_id: str,
@@ -108,7 +91,7 @@ async def login_password_credentials(
     device_id: str | None = None,
 ) -> MatrixCredentials:
     """Obtain password credentials and close HTTP before store construction."""
-    temporary = _create_credential_client(
+    temporary = create_matrix_http_client(
         homeserver,
         runtime_paths,
         user_id,
@@ -142,7 +125,7 @@ async def restore_credentials(
     http_headers: Mapping[str, str] | None = None,
 ) -> MatrixCredentials | None:
     """Verify persisted credentials; only a soft logout permits device renewal."""
-    temporary = _create_credential_client(
+    temporary = create_matrix_http_client(
         homeserver,
         runtime_paths,
         user_id,
