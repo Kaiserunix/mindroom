@@ -71,8 +71,8 @@ def test_first_party_openai_gpt_5_4_and_newer_use_responses(tmp_path: Path) -> N
     assert isinstance(compatible, MindRoomOpenAIChat)
 
 
-def test_openai_gpt_6_astra_uses_responses_through_compatible_proxy(tmp_path: Path) -> None:
-    """Astra must keep function tools on the Responses API when proxied."""
+def test_custom_openai_endpoint_requires_explicit_responses_selection(tmp_path: Path) -> None:
+    """A model name must not opt a compatible endpoint into a different API."""
     config = bind_runtime_paths(
         Config(
             models={
@@ -88,13 +88,14 @@ def test_openai_gpt_6_astra_uses_responses_through_compatible_proxy(tmp_path: Pa
 
     model = get_model_instance(config, runtime_paths_for(config), "astra")
 
-    assert isinstance(model, MindRoomOpenAIResponses)
+    assert isinstance(model, MindRoomOpenAIChat)
 
 
 @pytest.mark.parametrize(
     ("model_id", "api", "base_url", "expected_class"),
     [
         ("reasoning-alias", "responses", "http://localhost:9292/v1", MindRoomOpenAIResponses),
+        ("gpt-6-astra", "responses", "http://localhost:9292/v1", MindRoomOpenAIResponses),
         ("gpt-5.6", "chat_completions", None, MindRoomOpenAIChat),
         ("gpt-6-astra", "chat_completions", "http://localhost:9292/v1", MindRoomOpenAIChat),
     ],

@@ -158,12 +158,14 @@ def test_openai_responses_supplies_missing_tool_arguments_without_mutating_histo
     "model",
     [
         MindRoomOpenAIResponses(id="gpt-6-astra", api_key="test-key"),
+        MindRoomOpenAIResponses(id="custom-alias", api_key="test-key"),
+        MindRoomOpenAIResponses(id="gpt-4.1", api_key="test-key"),
         MindRoomOpenAIResponses(id="reasoning-alias", reasoning_effort="high", api_key="test-key"),
         MindRoomOpenAIResponses(id="reasoning-alias", reasoning={"effort": "high"}, api_key="test-key"),
     ],
 )
-def test_reasoning_responses_continue_tool_calls_from_the_previous_response(model: MindRoomOpenAIResponses) -> None:
-    """Explicit reasoning must preserve continuation even for an unknown model alias."""
+def test_responses_continue_tool_calls_independently_of_model_name(model: MindRoomOpenAIResponses) -> None:
+    """Responses continuation must work for aliases and non-reasoning models too."""
     assistant = Message(
         role="assistant",
         tool_calls=[
@@ -187,9 +189,22 @@ def test_reasoning_responses_continue_tool_calls_from_the_previous_response(mode
     assert formatted == [{"type": "function_call_output", "call_id": "call_1", "output": "ready"}]
 
 
-def test_explicit_reasoning_respects_disabled_response_storage() -> None:
+@pytest.mark.parametrize("storage_kwargs", [{"store": False}, {"request_params": {"store": False}}])
+def test_responses_reject_background_mode_with_disabled_storage(storage_kwargs: dict) -> None:
+    """Background requests must not silently override a storage opt-out."""
+    with pytest.raises(ValueError, match="Background Responses require store=True"):
+        MindRoomOpenAIResponses(id="custom-alias", background=True, **storage_kwargs)
+
+
+@pytest.mark.parametrize("storage_kwargs", [{"store": False}, {"request_params": {"store": False}}])
+def test_explicit_reasoning_respects_disabled_response_storage(storage_kwargs: dict) -> None:
     """Reasoning aliases must not turn a stateless request into server-side storage."""
-    model = MindRoomOpenAIResponses(id="reasoning-alias", reasoning_effort="high", store=False, api_key="test-key")
+    model = MindRoomOpenAIResponses(
+        id="reasoning-alias",
+        reasoning_effort="high",
+        api_key="test-key",
+        **storage_kwargs,
+    )
     messages = [
         Message(role="assistant", content="Earlier reply", provider_data={"response_id": "resp_1"}),
         Message(role="user", content="Follow up"),

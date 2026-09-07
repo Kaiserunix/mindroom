@@ -126,14 +126,24 @@ class MindRoomOpenAIResponses(OpenAIResponses):
 
     approval_receipt_after_response_id: ClassVar[bool] = True
 
+    def __post_init__(self) -> None:
+        """Use one storage setting for request construction and history replay."""
+        super().__post_init__()
+        if self.request_params is not None and "store" in self.request_params:
+            self.request_params = dict(self.request_params)
+            self.store = self.request_params.pop("store")
+        if self.background and self.store is False:
+            msg = "Background Responses require store=True"
+            raise ValueError(msg)
+
     def _using_reasoning_model(self) -> bool:
-        """Honor explicit reasoning for aliases absent from Agno's model-name list."""
-        return (
-            self.reasoning is not None
-            or self.reasoning_effort is not None
-            or self.id == "gpt-6-astra"
-            or super()._using_reasoning_model()
-        )
+        """Enable Responses continuation independently of the model's name.
+
+        Agno 3.0.5 gates response chaining and encrypted reasoning retrieval on
+        this predicate, although both belong to the API rather than a model list.
+        This does not enable reasoning or override ``store=False``.
+        """
+        return True
 
     def get_request_params(
         self,

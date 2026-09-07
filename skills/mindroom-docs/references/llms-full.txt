@@ -2659,11 +2659,13 @@ models:
 ```
 
 [GPT-6 Astra requires Responses for function calling](https://developers.openai.com/api/docs/guides/latest-model).
-For reasoning models exposed under a custom alias, also set `extra_kwargs.reasoning_effort` or `extra_kwargs.reasoning` so tool results preserve reasoning continuation.
+Responses continuation works independently of the model ID, including custom aliases.
+Set `extra_kwargs.reasoning_effort` or `extra_kwargs.reasoning` only when you want to customize reasoning.
 `extra_kwargs.store: false` remains respected; selecting Responses does not override it.
 
-When `api` is unset, existing defaults are unchanged: GPT 5.4 and newer models on the first-party OpenAI endpoint use Responses, as does `gpt-6-astra` on compatible proxies.
-Other OpenAI-compatible routes use Chat Completions.
+When `api` is unset, GPT 5.4 and newer models on the first-party OpenAI endpoint use Responses.
+Other routes, including all custom OpenAI-compatible endpoints, default to Chat Completions.
+If you previously relied on automatic Astra routing through a proxy, add `api: responses` before upgrading.
 Explicit Chat Completions disables native deferred-tool search and keeps MindRoom's dynamic-tool discovery.
 Selecting Responses on a custom endpoint does not enable OpenAI's hosted tool search; only supported first-party OpenAI and Codex routes use it.
 
