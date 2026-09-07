@@ -585,6 +585,10 @@ class ModelConfig(BaseModel):
         description="Model provider (openai, anthropic, vertexai_claude, ollama, etc)",
     )
     id: str = Field(description="Model ID specific to the provider")
+    api: Literal["responses", "chat_completions"] | None = Field(
+        default=None,
+        description="OpenAI API transport; unset keeps automatic model/endpoint selection",
+    )
     host: str | None = Field(default=None, description="Optional host URL (e.g., for Ollama)")
     api_key: str | None = Field(default=None, description="Optional API key (usually from env vars)")
     extra_kwargs: dict[str, Any] | None = Field(
@@ -603,6 +607,13 @@ class ModelConfig(BaseModel):
             "enables request-time fitting that trims replayed history when a request would exceed the window"
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_api_provider(self) -> Self:
+        if self.api is not None and self.provider.strip().lower() != "openai":
+            msg = "Model api is only supported for provider: openai"
+            raise ValueError(msg)
+        return self
 
 
 class RouterConfig(BaseModel):

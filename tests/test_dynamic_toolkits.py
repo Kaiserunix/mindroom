@@ -1442,6 +1442,35 @@ def test_openai_native_tool_search_attaches_deferred_toolkits_and_skips_homegrow
     assert ("code", "thread-a") not in dynamic_toolkits_module._loaded_tools
 
 
+@pytest.mark.parametrize(
+    ("api", "base_url"),
+    [("chat_completions", None), ("responses", "http://localhost:9292/v1")],
+)
+def test_explicit_openai_api_keeps_homegrown_tool_discovery_when_native_is_unavailable(
+    tmp_path: Path,
+    api: str,
+    base_url: str | None,
+) -> None:
+    """Chat and Responses proxies must not lose deferred tools to hosted-only search."""
+    raw = _base_config_data()
+    raw["models"]["gpt"] = {  # type: ignore[index]
+        "provider": "openai",
+        "id": "gpt-5.6",
+        "api": api,
+        "extra_kwargs": {"base_url": base_url},
+    }
+    raw["agents"]["code"]["model"] = "gpt"  # type: ignore[index]
+    raw["agents"]["code"]["tools"] = [{"sleep": {"defer": True}}]  # type: ignore[index]
+    config = _validated_config(tmp_path, raw)
+
+    agent = create_agent("code", config, _runtime_paths(tmp_path), execution_identity=None, session_id="thread-a")
+
+    function_names = {name for toolkit in agent.tools for name in toolkit.get_functions()}
+    assert "load_tool" in function_names
+    assert "sleep" not in function_names
+    assert _OPENAI_DEFERRED_TOOL_NAMES_ATTR not in vars(agent.model)
+
+
 def test_codex_deferred_browser_uses_non_reserved_function_name(tmp_path: Path) -> None:
     """The deferred browser function must not collide with Codex's reserved browser namespace."""
     raw = _base_config_data()
