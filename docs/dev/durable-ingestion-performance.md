@@ -442,3 +442,23 @@ red/green tests, Python-version results, wheel hashes and consumer qualification
 Review corrections require concrete realistic failures within the existing
 contract; speculative safeguards and large new abstractions are excluded.
 Prior performance measurements retain their original source revisions.
+
+### Replay and invitation parser correction
+
+The updated pin is producer `c4b4bf8e11eaa00b3307482145d263c7afd110ef`.
+It restores room context when replaying undecrypted events, so missing-key
+callbacks send a valid room ID. Malformed invitation envelopes now reach the
+existing durable transaction guard instead of disappearing during parsing.
+Valid unknown/redacted invitation events still remain ignored. The shared
+parser compatibility change is recorded in the producer changelog and contract.
+
+These two corrections add three net production lines. The full Nio PR remains
+1,222 production lines smaller than main. Producer verification passes 922 tests
+with three skipped, 88 affected checks on Python 3.12, mypy and repository hooks.
+All 60 installed wheel source files match the pinned revision. MindRoom's
+affected integration check passes 337 tests with one skipped in 7.57 seconds;
+all consumer repository hooks pass. Consumer production code is unchanged.
+Reproduction, red/green results, wheel
+identity and independent review dispositions remain in the indexed `native-loop`
+evidence directory (`replay-invite.md` and `consumer-c4b4bf8-*` logs). Existing
+performance measurements retain their original revisions.
