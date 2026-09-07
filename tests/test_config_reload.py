@@ -2165,7 +2165,7 @@ def test_config_update_plan_restarts_realtime_call_agent_when_agent_model_change
         agent_bots={entity: AsyncMock() for entity in running_entities},
     )
 
-    assert plan.entities_to_restart == {"general"}
+    assert plan.entities_to_restart == {"general", ROUTER_AGENT_NAME}
 
 
 def test_config_update_plan_restarts_implicit_cascaded_call_agent_when_room_model_changes() -> None:
