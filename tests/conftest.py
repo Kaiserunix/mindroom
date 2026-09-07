@@ -1923,9 +1923,6 @@ def install_runtime_journal_support(bot: RuntimeBot) -> RuntimeBot:
             ):
                 return True
             outcome = await client_room_admin_module.join_room(client, room_id)
-            if outcome in {RoomJoinOutcome.ACCESS_DENIED, RoomJoinOutcome.RETRYABLE_FAILURE}:
-                msg = "Failed to join invited room"
-                raise RuntimeError(msg)
             return outcome is RoomJoinOutcome.JOINED or outcome is True
         if target_membership == "leave":
             return await matrix_rooms_module.leave_room(client, room_id)

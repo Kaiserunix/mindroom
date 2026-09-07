@@ -42,7 +42,7 @@ dependencies = [
   "mdit-py-plugins>=0.5",
   "mem0ai>=0.1.115",
   # Arbitrary Olm to-device encryption uses the fork's tested internal API; update only with its round-trip tests.
-  "mindroom-nio[e2e]>=0.40,<0.41",
+  "mindroom-nio[e2e]>=1,<2",
   "openai",
   "packaging>=24",
   "pydantic>=2",
@@ -501,8 +501,6 @@ override-dependencies = [
   "pillow>=10.2,<11; python_version < '3.14'",
   "pillow>=11,<12; python_version >= '3.14'",
 ]
-[tool.uv.sources]
-mindroom-nio = { git = "https://github.com/mindroom-ai/mindroom-nio.git", rev = "c4b4bf8e11eaa00b3307482145d263c7afd110ef" }
 
 [tool.ruff]
 target-version = "py312"

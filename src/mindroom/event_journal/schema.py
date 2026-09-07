@@ -89,6 +89,15 @@ _TABLES = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS matrix_ingestion_membership (
+        principal_id TEXT NOT NULL,
+        room_id TEXT NOT NULL,
+        membership TEXT NOT NULL CHECK (membership IN ('join', 'leave')),
+        membership_epoch BIGINT NOT NULL CHECK (membership_epoch >= 0),
+        PRIMARY KEY (principal_id, room_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS visible_messages (
         principal_id TEXT NOT NULL,
         room_id TEXT NOT NULL,

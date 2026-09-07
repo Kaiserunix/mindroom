@@ -166,7 +166,9 @@ def _validate_membership_effect(item: IngestionRecordAdmission) -> None:
             raise invalid
     elif (
         item.previous_membership not in _MATRIX_MEMBERSHIPS
-        or item.previous_membership == item.membership
+        # A local command can confirm an unobserved room's initial leave/0
+        # position through HTTP even though it does not advance producer epoch.
+        or (item.previous_membership == item.membership and item.source is not DepartureSource.LOCAL)
         or item.membership_epoch
         != item.previous_membership_epoch + int(item.previous_membership == "join" and item.membership != "join")
     ):
@@ -257,16 +259,26 @@ def _apply_membership_effect(
 ) -> None:
     """Apply the tenure change before any semantic effect on the same record."""
     room_id = cast("str", admission.room_id)
+    producer = ingestion_membership_position(transaction, principal_id, room_id)
+    previous_epoch = 0 if producer is None else producer.membership_epoch
+    if admission.previous_membership_epoch != previous_epoch:
+        raise IngestionBatchIntegrityError
+    if producer is not None and (
+        admission.previous_membership is None
+        or ("join" if admission.previous_membership == "join" else "leave") != producer.membership
+    ):
+        raise IngestionBatchIntegrityError
+    # The first producer observation can adopt a journal with prior tenures.
+    # Keep those epochs: deliveries and journal events already own them.
+    was_joined = membership_position(transaction, principal_id, room_id).membership == "join"
     state = _claim_membership_state(transaction, principal_id, room_id)
-    if admission.previous_membership_epoch != state.membership_epoch:
-        raise IngestionBatchIntegrityError
-    membership_epoch = cast("int", admission.membership_epoch)
-    if admission.previous_membership == "join" and admission.membership != "join":
-        if state.departure_fenced or membership_epoch != state.membership_epoch + 1:
+    membership_epoch = state.membership_epoch
+    if admission.membership != "join" and (
+        admission.previous_membership == "join" or (producer is None and was_joined)
+    ):
+        if state.departure_fenced:
             raise IngestionBatchIntegrityError
-        _advance_membership_epoch(transaction, principal_id, room_id)
-    elif membership_epoch != state.membership_epoch:
-        raise IngestionBatchIntegrityError
+        membership_epoch = _advance_membership_epoch(transaction, principal_id, room_id)
     if admission.membership == "join":
         note_membership_restarted(transaction, principal_id, room_id)
     else:
@@ -278,6 +290,20 @@ def _apply_membership_effect(
             departure_fenced=True,
             owed_reports=state.owed_reports,
         )
+    transaction.execute(
+        """
+        INSERT INTO matrix_ingestion_membership (principal_id, room_id, membership, membership_epoch)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (principal_id, room_id) DO UPDATE SET
+            membership = excluded.membership, membership_epoch = excluded.membership_epoch
+        """,
+        (
+            principal_id,
+            room_id,
+            "join" if admission.membership == "join" else "leave",
+            admission.membership_epoch,
+        ),
+    )
 
 
 def _apply_ingestion_disposition(
@@ -542,7 +568,7 @@ def membership_position(
     principal_id: str,
     room_id: str,
 ) -> RoomMembershipPosition:
-    """Return the exact durable prior position for a local join or leave."""
+    """Return the journal tenure that owns this room's events and deliveries."""
     row = transaction.fetchone(
         "SELECT membership_epoch, departure_fenced FROM room_membership WHERE principal_id = ? AND room_id = ?",
         (principal_id, room_id),
@@ -562,6 +588,24 @@ def membership_position(
         "leave" if departure_fenced else "join",
         membership_epoch,
     )
+
+
+def ingestion_membership_position(
+    transaction: Transaction,
+    principal_id: str,
+    room_id: str,
+) -> RoomMembershipPosition | None:
+    """Return the last admitted producer position, independent of journal tenure."""
+    row = transaction.fetchone(
+        "SELECT membership, membership_epoch FROM matrix_ingestion_membership WHERE principal_id = ? AND room_id = ?",
+        (principal_id, room_id),
+    )
+    if row is None:
+        return None
+    membership, epoch = row["membership"], row["membership_epoch"]
+    if membership not in {"join", "leave"} or type(epoch) is not int or epoch < 0:
+        raise IngestionBatchIntegrityError
+    return RoomMembershipPosition(membership, epoch)
 
 
 def _advance_membership_epoch(

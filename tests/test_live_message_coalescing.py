@@ -4348,7 +4348,7 @@ async def test_coalescing_drain_logs_lifecycle_metadata() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cleanup_drains_pending_debounce_tasks(tmp_path: Path) -> None:
+async def test_stop_drains_pending_debounce_tasks(tmp_path: Path) -> None:
     """Drain pending debounce tasks when a bot is cleaned up."""
     bot = _make_bot(tmp_path, debounce_ms=1000)
     bot.client = AsyncMock()
@@ -4358,7 +4358,6 @@ async def test_cleanup_drains_pending_debounce_tasks(tmp_path: Path) -> None:
 
     with (
         patch("mindroom.turn_controller.dispatch_text_message", new=AsyncMock()) as mock_dispatch,
-        patch("mindroom.bot.get_joined_rooms", new=AsyncMock(return_value=[])),
         patch("mindroom.bot.wait_for_background_tasks", new=AsyncMock()),
     ):
         await _enqueue_for_dispatch(
@@ -4370,7 +4369,7 @@ async def test_cleanup_drains_pending_debounce_tasks(tmp_path: Path) -> None:
         )
         await _wait_for(lambda: not _coalescing_gate_is_idle(bot._coalescing_gate))
 
-        await bot.cleanup()
+        await bot.stop()
 
     mock_dispatch.assert_awaited_once()
     assert _coalescing_gate_is_idle(bot._coalescing_gate)

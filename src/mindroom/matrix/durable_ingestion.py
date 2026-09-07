@@ -172,6 +172,7 @@ async def run_ingestion_pump(
     before_admission: _BeforeAdmission | None = None,
     after_admission: _AfterAdmission | None = None,
     after_sync: Callable[[], Awaitable[None]] | None = None,
+    after_ack: Callable[[], None] | None = None,
     authenticate_to_device: _AuthenticateToDevice | None = None,
     schedule_trigger_sender_is_managed: Callable[[str], bool] = lambda _sender: False,
 ) -> None:
@@ -196,5 +197,8 @@ async def run_ingestion_pump(
             continue
         if facts is None:
             await wait_for_work()
-        elif facts.semantic_event_new:
-            wake_semantic_dispatch()
+        else:
+            if after_ack is not None:
+                after_ack()
+            if facts.semantic_event_new:
+                wake_semantic_dispatch()

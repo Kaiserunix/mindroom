@@ -4343,7 +4343,7 @@ class TestByteOrderPinning:
 class TestMembershipEpoch:
     """Leaving and rejoining invalidates what the previous membership saw."""
 
-    async def test_membership_position_is_the_durable_local_command_authority(
+    async def test_membership_position_exposes_current_journal_tenure(
         self,
         alice: PrincipalStore,
     ) -> None:

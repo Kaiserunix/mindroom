@@ -12,7 +12,7 @@ import nio
 from mindroom.authorization import is_sender_allowed_for_agent_reply_in_room
 from mindroom.commands.handler import generate_welcome_message_for_room
 from mindroom.constants import ROUTER_AGENT_NAME
-from mindroom.matrix.client_room_admin import RoomJoinOutcome, get_joined_rooms
+from mindroom.matrix.client_room_admin import get_joined_rooms
 from mindroom.matrix.invited_rooms_store import (
     invited_rooms_path,
     is_inviter_allowed,
@@ -181,12 +181,11 @@ class BotRoomLifecycle:
 
     async def _join_room_with_decrypt_notice_fence(
         self,
-        client: nio.AsyncClient,
         room_id: str,
-    ) -> RoomJoinOutcome:
+    ) -> bool:
         """Fence decrypt callbacks before a live join can race its first sync."""
         await self._add_join_decrypt_notice_fence(room_id)
-        return await self._join_fenced_room(client, room_id)
+        return await self.deps.change_membership(room_id, "join")
 
     async def _add_join_decrypt_notice_fence(self, room_id: str) -> None:
         """Persist the decrypt-notice fence required before one Matrix join."""
@@ -196,15 +195,6 @@ class BotRoomLifecycle:
                 add=(room_id,),
             ),
         )
-
-    async def _join_fenced_room(self, client: nio.AsyncClient, room_id: str) -> RoomJoinOutcome:
-        """Start one Matrix join after its decrypt-notice fence is durable."""
-        del client
-        joined = await self.deps.change_membership(room_id, "join")
-        join_outcome = RoomJoinOutcome.JOINED if joined else RoomJoinOutcome.TERMINAL_FAILURE
-        if join_outcome is RoomJoinOutcome.TERMINAL_FAILURE:
-            await self._clear_join_decrypt_notice_fence(room_id)
-        return join_outcome
 
     def _client_has_joined_room(self, room_id: str) -> bool:
         """Return whether the owned client already projects this room as joined."""
@@ -336,7 +326,7 @@ class BotRoomLifecycle:
                     )
                 continue
 
-            if await self._join_room_with_decrypt_notice_fence(client, room_id) is RoomJoinOutcome.JOINED:
+            if await self._join_room_with_decrypt_notice_fence(room_id):
                 current_rooms.add(room_id)
                 self._logger().info("Joined room", room_id=room_id)
                 await self._on_configured_room_joined(room_id)
@@ -355,6 +345,31 @@ class BotRoomLifecycle:
                 "leave",
             ),
         )
+
+    async def leave_all_rooms(self, *, timeout_seconds: float) -> None:
+        """Leave non-DM rooms before sync stops, bounding durable command waits."""
+        client = self._client()
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+
+        async def leave(room_id: str) -> bool:
+            try:
+                async with asyncio.timeout_at(deadline):
+                    return await self.deps.change_membership(room_id, "leave")
+            except TimeoutError:
+                self._logger().warning("matrix_removal_leave_timeout", room_id=room_id)
+                return False
+
+        try:
+            joined_rooms = await get_joined_rooms(client)
+            if joined_rooms:
+                await leave_non_dm_rooms(
+                    client,
+                    joined_rooms,
+                    on_room_left=self.deps.on_room_left,
+                    leave_room_action=leave,
+                )
+        except Exception:
+            self._logger().exception("Error leaving rooms during cleanup")
 
     async def _rooms_to_leave(self) -> list[str]:
         """Return joined rooms this bot should now leave before DM filtering."""
@@ -510,7 +525,6 @@ class BotRoomLifecycle:
         sender: str,
     ) -> None:
         """Accept one invite when its dedicated invitation policy allows it."""
-        client = self._client()
         async with self._lock_for_room(self._invite_join_locks, room.room_id):
             if not self._should_accept_invite():
                 self._logger().info("Ignored invite", room_id=room.room_id, sender=sender)
@@ -550,12 +564,10 @@ class BotRoomLifecycle:
                 await self._clear_join_decrypt_notice_fence(room.room_id)
                 return
             sender = current_sender
-            join_outcome = await self._join_fenced_room(client, room.room_id)
-            if join_outcome is not RoomJoinOutcome.JOINED:
+            if not await self.deps.change_membership(room.room_id, "join"):
+                # False includes stale position and exhausted HTTP retries;
+                # neither proves a terminal rejection of this invitation.
                 self._logger().error("Failed to join room", room_id=room.room_id)
-                if join_outcome is RoomJoinOutcome.TERMINAL_FAILURE:
-                    self._forget_pending_room_invite(room.room_id)
-                    return
                 msg = f"Failed to join invited room {room.room_id}"
                 raise RuntimeError(msg)
 

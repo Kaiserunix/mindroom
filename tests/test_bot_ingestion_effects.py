@@ -83,7 +83,7 @@ async def test_old_departure_receipt_cannot_clear_a_new_membership(
         previous_epoch=0,
     )
     principal = MagicMock()
-    principal.membership_position = AsyncMock(return_value=position)
+    principal.ingestion_membership_position = AsyncMock(return_value=position)
     with (
         patch.object(bot, "journal_principal", return_value=principal),
         patch.object(
@@ -211,7 +211,7 @@ async def test_authoritative_join_requests_call_reconciliation_after_frame_publi
         previous_epoch=1,
     )
     principal = MagicMock()
-    principal.membership_position = AsyncMock(return_value=RoomMembershipPosition("join", 1))
+    principal.ingestion_membership_position = AsyncMock(return_value=RoomMembershipPosition("join", 1))
     manager = MagicMock()
     manager.on_sync_room_membership = AsyncMock()
     bot._call_manager = manager

@@ -18,12 +18,16 @@ from mindroom.constants import STREAM_STATUS_KEY
 from mindroom.event_journal import (
     AdmissionFacts,
     DeliveryProjectionPendingError,
+    DeliveryStage,
+    DepartureSource,
     EventJournalStore,
     InboundEvent,
+    IngestionBatchIntegrityError,
     IngestionBatchSequenceError,
     IngestionConsumerBindingError,
     IngestionRecordAdmission,
     PrincipalStore,
+    RoomMembershipPosition,
 )
 from mindroom.event_journal import store as journal_store
 from mindroom.matrix import durable_ingestion
@@ -402,3 +406,92 @@ async def test_initial_nonjoined_producer_position_stays_fenced(
     await consume_one_ingestion_batch(Session(SyncBatch(stream, 2, (record,))), principal, account_id=ACCOUNT)
     position = await principal.membership_position(ROOM)
     assert (position.membership, position.membership_epoch) == ("join", 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("membership", ["join", "leave", "invite", "ban"])
+async def test_initial_producer_observation_adopts_existing_journal_ownership(
+    journal_database: Callable[[], EventJournalStore],
+    membership: str,
+) -> None:
+    """Adoption preserves joined ownership or fences it on the first nonjoin."""
+    store = journal_database()
+    stream = uuid4()
+    principal = store.principal(ACCOUNT)
+    await principal.fence_departure(ROOM, source=DepartureSource.LOCAL)
+    await principal.note_membership_restarted(ROOM)
+    await principal.enqueue_matrix_delivery(
+        delivery_id="$old-tenure",
+        stage=DeliveryStage.FINAL,
+        room_id=ROOM,
+        thread_id=None,
+        payload={"msgtype": "m.text", "body": "existing answer"},
+    )
+    await principal_for(store, stream)
+    record = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership(None, membership, 0, 0))
+    batch = SyncBatch(stream, 1, (record,))
+    await consume_one_ingestion_batch(Session(batch), principal, account_id=ACCOUNT)
+    replay = await consume_one_ingestion_batch(Session(batch), principal, account_id=ACCOUNT)
+    assert replay is not None
+    assert not replay.receipt_new
+    joined = membership == "join"
+    assert await principal.membership_position(ROOM) == RoomMembershipPosition(
+        "join" if joined else "leave",
+        1 if joined else 2,
+    )
+    assert await principal.ingestion_membership_position(ROOM) == RoomMembershipPosition(
+        "join" if joined else "leave",
+        0,
+    )
+    delivery = await principal.load_matrix_delivery(delivery_id="$old-tenure", stage=DeliveryStage.FINAL)
+    assert delivery is not None
+    assert delivery.membership_epoch == 1
+    assert delivery.retired is not joined
+
+
+@pytest.mark.asyncio
+async def test_producer_membership_position_rolls_back_with_failed_admission(
+    journal_database: Callable[[], EventJournalStore],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed batch cannot advance command position ahead of journal ownership."""
+    store = journal_database()
+    stream = uuid4()
+    principal = await principal_for(store, stream)
+    await principal.fence_departure(ROOM, source=DepartureSource.LOCAL)
+    record = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership(None, "join", 0, 0))
+    batch = SyncBatch(stream, 1, (record, message("$blocked")))
+    snapshot = journal_store._snapshot_interactive_source
+
+    def blocked(_transaction: Transaction, _principal_id: str, _event: InboundEvent) -> None:
+        message = "pending projection"
+        raise DeliveryProjectionPendingError(message)
+
+    monkeypatch.setattr(journal_store, "_snapshot_interactive_source", blocked)
+    with pytest.raises(DeliveryProjectionPendingError):
+        await consume_one_ingestion_batch(Session(batch), principal, account_id=ACCOUNT)
+    assert await principal.membership_position(ROOM) == RoomMembershipPosition("leave", 1)
+    assert await principal.ingestion_membership_position(ROOM) is None
+    monkeypatch.setattr(journal_store, "_snapshot_interactive_source", snapshot)
+    await consume_one_ingestion_batch(Session(batch), principal, account_id=ACCOUNT)
+    assert await principal.membership_position(ROOM) == RoomMembershipPosition("join", 1)
+    assert await principal.ingestion_membership_position(ROOM) == RoomMembershipPosition("join", 0)
+    assert [event.event_id for event in await principal.pending()] == ["$blocked"]
+
+
+@pytest.mark.asyncio
+async def test_adopted_membership_rejects_a_skipped_producer_epoch(
+    journal_database: Callable[[], EventJournalStore],
+) -> None:
+    """Different journal tenure must not weaken producer transition validation."""
+    store = journal_database()
+    stream = uuid4()
+    principal = await principal_for(store, stream)
+    await principal.fence_departure(ROOM, source=DepartureSource.LOCAL)
+    record = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership(None, "join", 0, 0))
+    await consume_one_ingestion_batch(Session(SyncBatch(stream, 1, (record,))), principal, account_id=ACCOUNT)
+    invalid = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership("join", "leave", 1, 2))
+    with pytest.raises(IngestionBatchIntegrityError):
+        await consume_one_ingestion_batch(Session(SyncBatch(stream, 2, (invalid,))), principal, account_id=ACCOUNT)
+    assert await principal.membership_position(ROOM) == RoomMembershipPosition("join", 1)
+    assert await principal.ingestion_membership_position(ROOM) == RoomMembershipPosition("join", 0)

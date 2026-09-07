@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from contextvars import Context
 from dataclasses import replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Protocol, cast
-from uuid import UUID, uuid4, uuid5
+from uuid import uuid4
 
 import nio
 from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
@@ -44,6 +43,7 @@ from mindroom.hooks import (
 )
 from mindroom.matrix.decrypt_failure import handle_decrypt_failure
 from mindroom.matrix.durable_ingestion import run_ingestion_pump
+from mindroom.matrix.durable_membership import change_local_membership
 from mindroom.matrix.event_info import EventInfo, origin_server_ts_from_event_source
 from mindroom.matrix.health import (
     SyncCacheWriteProgress,
@@ -54,7 +54,6 @@ from mindroom.matrix.health import (
 )
 from mindroom.matrix.presence import build_agent_status_message, set_presence_status
 from mindroom.matrix.room_cleanup import cleanup_all_orphaned_bots
-from mindroom.matrix.rooms import leave_non_dm_rooms
 from mindroom.matrix.state import resolve_room_aliases
 from mindroom.matrix.sync_continuity import SyncContinuityStore
 from mindroom.matrix.sync_loop import bot_ingestion_config, sliding_sync_room_subscriptions
@@ -65,7 +64,6 @@ from mindroom.memory import store_conversation_memory
 from mindroom.message_target import MessageTarget  # noqa: TC001
 from mindroom.post_response_effects import PostResponseEffectsSupport
 from mindroom.runtime_shutdown import (
-    ENTITY_REMOVED_SHUTDOWN,
     GENERIC_SHUTDOWN,
     RESPONSE_FINALIZATION_TIMEOUT_SECONDS,
     SYNC_SHUTDOWN_PREPARATION_TIMEOUT_SECONDS,
@@ -105,7 +103,6 @@ from .event_journal import (
     EventJournalStore,
     EventKind,
     PrincipalStore,
-    RoomMembershipPosition,
     SemanticConsumer,
 )
 from .event_journal_open import OpenEventJournal, open_event_journal
@@ -201,9 +198,6 @@ __all__ = ["AgentBot", "TeamBot", "create_bot_for_entity"]
 _SYNC_TIMEOUT_MS = 5_000
 _DELIVERY_RECOVERY_RETRY_INITIAL_DELAY_SECONDS = 1.0
 _DELIVERY_RECOVERY_RETRY_MAX_DELAY_SECONDS = 30.0
-_LOCAL_MEMBERSHIP_OPERATION_NAMESPACE = UUID(
-    "0bd4e975-c3e9-5b10-8d46-68fdda1adc07",
-)
 
 
 _SYNC_FILTER: dict[str, object] = {
@@ -388,6 +382,7 @@ class AgentBot:
     _room_lifecycle: BotRoomLifecycle
     _local_departures_awaiting_sync: set[str]
     _local_membership_lock: asyncio.Lock
+    _ingestion_admission_progress: asyncio.Event
     _sync_continuity_store: SyncContinuityStore
     _response_recovery_diagnostic_classes: set[str]
 
@@ -471,6 +466,7 @@ class AgentBot:
         self._calls_reconcile_pending = False
         self._local_departures_awaiting_sync = set()
         self._local_membership_lock = asyncio.Lock()
+        self._ingestion_admission_progress = asyncio.Event()
         self._response_recovery_diagnostic_classes = set()
 
         async def send_room_lifecycle_response(
@@ -1241,47 +1237,19 @@ class AgentBot:
         room_id: str,
         target_membership: str,
     ) -> bool:
-        """Execute one journal-authoritative durable local join or leave."""
-        if type(room_id) is not str or not room_id:
-            message = "room_id must be a nonempty str"
-            raise TypeError(message)
-        if type(target_membership) is not str or target_membership not in {
-            "join",
-            "leave",
-        }:
-            message = "target_membership must be exactly 'join' or 'leave'"
-            raise TypeError(message)
+        """Serialize one local membership command while ingestion keeps draining."""
         session = self._ingestion_session
         if session is None:
             message = "owned Matrix ingestion session is missing"
             raise PermanentMatrixStartupError(message)
         async with self._local_membership_lock:
-            await session.wait_for_membership_idle()
-            position = await self.journal_principal().membership_position(room_id)
-            if type(position) is not RoomMembershipPosition:
-                message = "journal returned an invalid membership position"
-                raise RuntimeError(message)
-            if position.membership == target_membership:
-                return True
-            operation_name = json.dumps(
-                [
-                    self.agent_user.user_id,
-                    room_id,
-                    position.membership_epoch,
-                    target_membership,
-                ],
-                ensure_ascii=True,
-                separators=(",", ":"),
-            )
-            return await session.change_membership(
-                operation_id=uuid5(
-                    _LOCAL_MEMBERSHIP_OPERATION_NAMESPACE,
-                    operation_name,
-                ),
+            return await change_local_membership(
+                session,
+                account_id=self.agent_user.user_id,
                 room_id=room_id,
-                previous_membership=position.membership,
-                previous_epoch=position.membership_epoch,
-                current_membership=target_membership,
+                target_membership=target_membership,
+                read_position=self.journal_principal().ingestion_membership_position,
+                admission_progress=self._ingestion_admission_progress,
             )
 
     async def leave_unconfigured_rooms(self) -> None:
@@ -1630,7 +1598,8 @@ class AgentBot:
         """Reconcile app state only while this admitted membership is still current."""
         room_id = admission.room_id
         assert room_id is not None
-        position = await self.journal_principal().membership_position(room_id)
+        position = await self.journal_principal().ingestion_membership_position(room_id)
+        assert position is not None
         joined = admission.membership == "join"
         expected_membership = "join" if joined else "leave"
         if (position.membership, position.membership_epoch) != (expected_membership, admission.membership_epoch):
@@ -2036,30 +2005,9 @@ class AgentBot:
             logger.exception("agent_start_failed", agent=self.agent_name)
             return False
 
-    async def cleanup(self) -> None:
-        """Clean up the agent by leaving all rooms and stopping.
-
-        This method ensures clean shutdown when an agent is removed from config.
-        """
-        assert self.client is not None
-        # Leave all rooms (preserving DM rooms)
-        try:
-            joined_rooms = await get_joined_rooms(self.client)
-            if joined_rooms:
-                await leave_non_dm_rooms(
-                    self.client,
-                    joined_rooms,
-                    on_room_left=self._fence_left_room,
-                    leave_room_action=lambda room_id: self._change_local_membership(
-                        room_id,
-                        "leave",
-                    ),
-                )
-        except Exception:
-            self.logger.exception("Error leaving rooms during cleanup")
-
-        # Stop the bot
-        await self.stop(shutdown_intent=ENTITY_REMOVED_SHUTDOWN)
+    async def leave_rooms(self) -> None:
+        """Leave rooms for entity removal while the orchestrator keeps sync alive."""
+        await self._room_lifecycle.leave_all_rooms(timeout_seconds=SYNC_SHUTDOWN_PREPARATION_TIMEOUT_SECONDS)
 
     async def _fence_left_room(self, room_id: str) -> None:
         """Remember one local leave while its source echo is still outstanding."""
@@ -2350,11 +2298,15 @@ class AgentBot:
             )
 
     async def _quiesce_matrix_ingestion(self) -> None:
-        """Drain one final durable source response before a clean stop."""
+        """Bound source drain; unacknowledged input survives later cancellation."""
         self._matrix_ingestion_quiesce_requested = True
         session = self._ingestion_session
         if session is not None:
-            await session.quiesce()
+            try:
+                async with asyncio.timeout(SYNC_SHUTDOWN_PREPARATION_TIMEOUT_SECONDS):
+                    await session.quiesce()
+            except TimeoutError:
+                self.logger.warning("matrix_ingestion_quiesce_timeout")
 
     async def sync_forever(self) -> None:
         """Run the owned durable source and batch admission pump together."""
@@ -2384,6 +2336,7 @@ class AgentBot:
                 before_admission=self._before_ingestion_admission,
                 after_admission=self._after_ingestion_admission,
                 after_sync=self._on_ingestion_frame_completion,
+                after_ack=self._ingestion_admission_progress.set,
                 authenticate_to_device=lambda source, event: cast("MindRoomAsyncClient", client).authenticate_to_device(
                     source,
                     event,

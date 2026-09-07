@@ -264,6 +264,10 @@ def ingestion_timeline_views(
     parsed = parse_matrix_media_event_source(source) if is_encrypted_media_event_source(source) else None
     if not isinstance(parsed, MATRIX_MEDIA_EVENT_TYPES):
         parsed = nio.Event.parse_event(dict(source))
+    if isinstance(parsed, (nio.BadEvent, nio.UnknownBadEvent)):
+        # Ordinary malformed timeline payloads are retained by nio. They have
+        # no semantic work, but must settle so later input can advance.
+        return None
     if not isinstance(parsed, nio.Event):
         raise TypeError(message)
     if expected_event_id is not None and parsed.event_id != expected_event_id:

@@ -446,7 +446,7 @@ class TestAdmissionAdapter:
         assert not any("Error validating event" in record.getMessage() for record in caplog.records)
 
     @pytest.mark.parametrize("encrypted", [False, True])
-    async def test_malformed_media_ingress_retains_validation_failure(
+    async def test_malformed_media_ingress_has_no_semantic_disposition(
         self,
         encrypted: bool,
         caplog: pytest.LogCaptureFixture,
@@ -457,17 +457,15 @@ class TestAdmissionAdapter:
             source["content"]["file"] = {}
         else:
             del source["content"]["url"]
-        with (
-            caplog.at_level("WARNING", logger="nio.events.misc"),
-            pytest.raises(TypeError, match="Unsupported ingestion event"),
-        ):
-            ingestion_timeline_views(
+        with caplog.at_level("WARNING", logger="nio.events.misc"):
+            views = ingestion_timeline_views(
                 room_id=ROOM,
                 source=source,
                 self_sender=BOT,
                 provenance=nio.TimelineEventProvenance.RECOVERED,
             )
 
+        assert views is None
         assert any("ValidationError" in record.getMessage() for record in caplog.records)
 
     async def test_a_threaded_message_lands_in_its_thread(self) -> None:

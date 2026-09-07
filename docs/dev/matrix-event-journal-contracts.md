@@ -25,7 +25,8 @@ One shared boundary helper encodes `None` to the empty string and decodes it bac
 
 ### Durable sync batch boundary
 
-The Matrix client uses `nio.durable.open_durable_sync` with Classic sync only.
+The Matrix client uses `nio.durable.open_durable_sync` with Classic or Simplified Sliding Sync.
+Both development and published MindRoom wheels require the released `mindroom-nio>=1.0.0,<2` package, with no Git source override.
 Account, device, consumer and stream ownership bind once when opening the session.
 The application trusts nio's typed records and does not reproduce a canonical
 JSON, digest or per-record proof protocol. Old unmerged ingestion formats are
@@ -52,11 +53,24 @@ Removed or changed devices fail closed. Nio never restores application subtypes.
 Self-authored pending/streaming replacements are filtered before classification;
 original placeholders, terminal and foreign edits, redactions, undecrypted content
 and unknown statuses retain normal handling.
+Malformed ordinary timeline payloads have no semantic disposition and settle through the compatibility path so they cannot block later valid input.
+Malformed producer ownership or membership metadata still rejects admission.
 
-Quiesce stops new polling and drains already captured input while the pump stays
-alive. Close releases the session before the HTTP client. Local membership changes
-use the public ordered session API and journal membership tenure: initial join is
-epoch 0, departure increments it, and rejoin retains that increment.
+Quiesce stops new polling and drains already captured input while the pump stays alive, bounded by the five-second sync preparation timeout.
+If projection recovery prevents admission, shutdown continues and leaves the unacknowledged producer batch for restart.
+Close releases the session before the HTTP client.
+Entity removal keeps ingestion alive through room departures, then cancels it before closing the session and journal.
+Removal commands share a five-second deadline so retained input that cannot be admitted cannot block removal indefinitely.
+Local membership changes use the public ordered session API and the last admitted producer position.
+Commands wait for retained producer batches to finish admission and acknowledgement before testing a no-op or selecting their expected position.
+If captured input changes that position while nio takes command ownership, the gateway reads the admitted position again and retries.
+An unobserved producer position remains unknown, so startup cleanup must issue a leave request even when nio's initial position is `leave/0`.
+The resulting local confirmation is admitted without advancing producer epoch, while fencing any previously joined journal tenure.
+Producer positions commit with the batch receipt, separately from the journal tenure that owns existing events and deliveries.
+An ordinary store adoption can therefore start the producer at epoch zero while preserving a journal's older tenure.
+The first observed departure fences any previously joined journal tenure; later departures increment journal tenure once, and rejoins retain it.
+Membership post-hooks compare producer positions so replay remains correct across adoption.
+An unsuccessful join preserves its pending invitation and decrypt fence because the producer's boolean result does not distinguish terminal rejection from stale position or exhausted HTTP retries.
 
 ### Durable admission
 
@@ -305,14 +319,12 @@ Synapse expires stored transaction mappings on a periodic cleanup, so a determin
 
 ### Producer-owned local membership confirmation
 
-The durable Classic producer keeps one successful local membership intent until
-its outcome is acknowledged and an authoritative sync boundary observes it. A
-subsequent local command waits for that observation; shutdown may leave the
-acknowledged observation marker for restart. Nio reconciles reported echoes and
-owns the resulting membership epochs.
+The durable producer keeps one successful local membership intent until its outcome is acknowledged and an authoritative sync boundary observes it.
+A subsequent local command waits for that observation; shutdown may leave the acknowledged observation marker for restart.
+Nio reconciles reported echoes and owns producer membership epochs.
 
-Typed batch admission applies explicit producer membership positions directly.
-It must not create or consume the legacy `owed_departure_reports` counter for
-these records. Otherwise a suppressed echo leaves debt that hides the next real
-departure. Keep the legacy counter only for separate callers whose contracts still
-require it. Admission and its lifecycle effects remain in one journal transaction.
+Typed batch admission stores explicit producer membership positions separately from journal tenure.
+It must not create or consume the legacy `owed_departure_reports` counter for these records.
+Otherwise a suppressed echo leaves debt that hides the next real departure.
+Keep the legacy counter only for separate callers whose contracts still require it.
+Admission and its lifecycle effects remain in one journal transaction.

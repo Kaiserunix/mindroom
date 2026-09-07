@@ -341,17 +341,37 @@ async def test_entity_removal_recovers_original_final_before_bot_cleanup(tmp_pat
     runtime_paths = resolve_runtime_paths(config_path=config_path, storage_path=tmp_path / "data", process_env={})
     orchestrator = _MultiAgentOrchestrator(runtime_paths=runtime_paths)
     order: list[str] = []
+
+    async def receive() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            order.append("cancel_sync")
+
+    sync = asyncio.create_task(receive())
+    await asyncio.sleep(0)
+    orchestrator._sync_tasks["removed"] = sync
+
+    async def cleanup() -> None:
+        assert not sync.done(), "membership cleanup still needs the ingestion pump"
+        order.append("cleanup")
+
     bot = MagicMock()
     bot.prepare_for_sync_shutdown = AsyncMock(side_effect=lambda **_kwargs: order.append("quiesce"))
-    bot.cleanup = AsyncMock(side_effect=lambda: order.append("cleanup"))
+    bot.leave_rooms = AsyncMock(side_effect=cleanup)
+    bot.stop = AsyncMock(side_effect=lambda **_kwargs: order.append("stop"))
     orchestrator.agent_bots["removed"] = bot
     orchestrator._approval_transport.reconcile_unavailable_entities = AsyncMock(
         side_effect=lambda _names: order.append("recover"),
     )
 
-    await orchestrator._remove_deleted_entities({"removed"})
+    try:
+        await orchestrator._remove_deleted_entities({"removed"})
+    finally:
+        sync.cancel()
+        await asyncio.gather(sync, return_exceptions=True)
 
-    assert order == ["quiesce", "recover", "cleanup"]
+    assert order == ["quiesce", "recover", "cleanup", "cancel_sync", "stop"]
     assert "removed" not in orchestrator.agent_bots
 
 
@@ -370,7 +390,8 @@ async def test_entity_removal_keeps_bot_registered_until_cleanup_succeeds(
     orchestrator = _MultiAgentOrchestrator(runtime_paths=runtime_paths)
     bot = MagicMock()
     bot.prepare_for_sync_shutdown = AsyncMock()
-    bot.cleanup = AsyncMock(side_effect=RuntimeError("cleanup failed"))
+    bot.leave_rooms = AsyncMock()
+    bot.stop = AsyncMock(side_effect=RuntimeError("cleanup failed"))
     orchestrator.agent_bots["removed"] = bot
     orchestrator._approval_transport.reconcile_unavailable_entities = AsyncMock()
 

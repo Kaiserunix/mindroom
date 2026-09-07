@@ -333,13 +333,19 @@ class PrincipalStore:
         )
 
     async def membership_position(self, room_id: str) -> RoomMembershipPosition:
-        """Return the journal-authoritative prior position for a local command."""
+        """Return the journal tenure that owns this room's events and deliveries."""
         return await self._backend.read(
             lambda transaction: journal.membership_position(
                 transaction,
                 self._principal_id,
                 room_id,
             ),
+        )
+
+    async def ingestion_membership_position(self, room_id: str) -> RoomMembershipPosition | None:
+        """Return the producer position, or None until its first membership admission."""
+        return await self._backend.read(
+            lambda transaction: journal.ingestion_membership_position(transaction, self._principal_id, room_id),
         )
 
     async def interactive_prompt_is_current(

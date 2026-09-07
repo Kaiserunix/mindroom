@@ -1777,12 +1777,11 @@ class _MultiAgentOrchestrator:
         await emit(self.hook_registry, EVENT_CONFIG_RELOADED, context)
 
     async def _remove_deleted_entities(self, removed_entities: set[str]) -> None:
-        """Cancel, clean up, and unregister entities removed from config."""
+        """Leave rooms before canceling ingestion and releasing removed entities."""
         self._external_trigger_runtime.unbind_for_entity_changes(removed_entities)
         for entity_name in removed_entities:
             self._pending_replacement_recovery_room_ids.pop(entity_name, None)
             await self._cancel_bot_start_task(entity_name)
-            await cancel_sync_task(entity_name, self._sync_tasks)
 
             bot = self.agent_bots.get(entity_name)
             if bot is not None:
@@ -1795,8 +1794,15 @@ class _MultiAgentOrchestrator:
 
         for entity_name in removed_entities:
             bot = self.agent_bots.get(entity_name)
+            try:
+                if bot is not None:
+                    await bot.leave_rooms()
+            finally:
+                # Membership commands need the source and admission pump, but
+                # both must stop before the session and journal stores close.
+                await cancel_sync_task(entity_name, self._sync_tasks, shutdown_intent=ENTITY_REMOVED_SHUTDOWN)
             if bot is not None:
-                await bot.cleanup()
+                await bot.stop(shutdown_intent=ENTITY_REMOVED_SHUTDOWN)
                 self.agent_bots.pop(entity_name, None)
 
     async def _stop_entities_before_mcp_sync(

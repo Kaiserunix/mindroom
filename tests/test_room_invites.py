@@ -90,9 +90,6 @@ def _legacy_membership_transport_for_invite_business_tests(
             if joined is RoomJoinOutcome.JOINED:
                 await bot.journal_principal().note_membership_restarted(room_id)
                 return True
-            if joined in {RoomJoinOutcome.ACCESS_DENIED, RoomJoinOutcome.RETRYABLE_FAILURE}:
-                msg = "Failed to join invited room"
-                raise RuntimeError(msg)
             return False
         assert target_membership == "leave"
         left = await client_room_admin.leave_room(client, room_id)
@@ -552,11 +549,12 @@ async def test_startup_already_joined_reconciles_gateway_without_membership_http
     bot.client = AsyncMock()
     bot.client.rooms = {room_id: MagicMock()}
     principal = MagicMock()
-    principal.membership_position = AsyncMock(
+    principal.ingestion_membership_position = AsyncMock(
         return_value=RoomMembershipPosition("join", 4),
     )
     session = MagicMock()
     session.wait_for_membership_idle = AsyncMock()
+    session.next_batch = AsyncMock(return_value=None)
     session.change_membership = AsyncMock(return_value=True)
     bot.journal_principal = MagicMock(return_value=principal)
     bot._ingestion_session = session
@@ -573,7 +571,7 @@ async def test_startup_already_joined_reconciles_gateway_without_membership_http
     await bot.join_configured_rooms()
 
     session.wait_for_membership_idle.assert_awaited_once_with()
-    principal.membership_position.assert_awaited_once_with(room_id)
+    principal.ingestion_membership_position.assert_awaited_once_with(room_id)
     session.change_membership.assert_not_awaited()
     bot.client.join.assert_not_awaited()
 
@@ -605,11 +603,12 @@ async def test_unconfigured_leave_uses_durable_gateway_without_direct_http(
     install_runtime_journal_support(bot)
     bot.client = AsyncMock()
     principal = MagicMock()
-    principal.membership_position = AsyncMock(
+    principal.ingestion_membership_position = AsyncMock(
         return_value=RoomMembershipPosition("join", 4),
     )
     session = MagicMock()
     session.wait_for_membership_idle = AsyncMock()
+    session.next_batch = AsyncMock(return_value=None)
     session.change_membership = AsyncMock(return_value=True)
     bot.journal_principal = MagicMock(return_value=principal)
     bot._ingestion_session = session
@@ -869,11 +868,11 @@ async def test_live_invite_forbidden_join_remains_retryable(
 
 
 @pytest.mark.asyncio
-async def test_terminal_invite_join_failure_does_not_abort_sync(
+async def test_unconfirmed_invite_join_failure_retains_retry_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A permanently unjoinable room must not wedge later sync callbacks."""
+    """The durable boolean result cannot establish a terminal join rejection."""
     config = bind_runtime_paths(
         Config(router=RouterConfig(model="default", accept_invites=True)),
         test_runtime_paths(tmp_path),
@@ -908,7 +907,8 @@ async def test_terminal_invite_join_failure_does_not_abort_sync(
 
     bot.client.join.assert_awaited_once_with("!invalid-state:localhost")
     assert await bot._journal_dispatcher.store.pending() == ()
-    assert not bot._room_lifecycle.decrypt_notice_is_fenced("!invalid-state:localhost")
+    assert bot._room_lifecycle.decrypt_notice_is_fenced("!invalid-state:localhost")
+    assert "!invalid-state:localhost" in _pending_room_invites(config, ROUTER_AGENT_NAME)
 
 
 @pytest.mark.asyncio

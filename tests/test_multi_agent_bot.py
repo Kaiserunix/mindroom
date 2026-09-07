@@ -552,6 +552,7 @@ class TestAgentBot(AgentBotTestBase):
             *,
             account_id: str,
             after_sync: object,
+            after_ack: object,
             authenticate_to_device: object,
             wait_for_work: object,
             wake_semantic_dispatch: object,
@@ -561,6 +562,7 @@ class TestAgentBot(AgentBotTestBase):
             schedule_trigger_sender_is_managed: object,
         ) -> None:
             assert after_sync == bot._on_ingestion_frame_completion
+            assert after_ack == bot._ingestion_admission_progress.set
             assert callable(authenticate_to_device)
             assert before_admission == bot._before_ingestion_admission
             assert wait_for_delivery_projection == bot._wait_for_delivery_projection
@@ -785,12 +787,12 @@ class TestAgentBot(AgentBotTestBase):
             await asyncio.gather(syncing, return_exceptions=True)
 
     @pytest.mark.asyncio
-    async def test_local_membership_gateway_uses_journal_position_and_stable_operation(
+    async def test_local_membership_gateway_uses_admitted_producer_position_and_stable_operation(
         self,
         mock_agent_user: AgentMatrixUser,
         tmp_path: Path,
     ) -> None:
-        """Retries reuse one identity and a journal-current target is a no-op."""
+        """Retries reuse one identity and a producer-current target is a no-op."""
         config = self._config_for_storage(tmp_path)
         bot = make_test_agent_bot(
             mock_agent_user,
@@ -802,10 +804,11 @@ class TestAgentBot(AgentBotTestBase):
         leave = RoomMembershipPosition("leave", 0)
         join = RoomMembershipPosition("join", 0)
         principal = SimpleNamespace(
-            membership_position=AsyncMock(side_effect=(leave, leave, join)),
+            ingestion_membership_position=AsyncMock(side_effect=(leave, leave, join)),
         )
         session = SimpleNamespace(
             wait_for_membership_idle=AsyncMock(),
+            next_batch=AsyncMock(return_value=None),
             change_membership=AsyncMock(return_value=True),
         )
         bot.journal_principal = MagicMock(return_value=principal)
@@ -833,7 +836,7 @@ class TestAgentBot(AgentBotTestBase):
             ),
         ]
         assert session.wait_for_membership_idle.await_count == 3
-        assert principal.membership_position.await_args_list == [
+        assert principal.ingestion_membership_position.await_args_list == [
             call(room_id),
             call(room_id),
             call(room_id),
@@ -920,6 +923,7 @@ class TestAgentBot(AgentBotTestBase):
 
         session = SimpleNamespace(
             wait_for_membership_idle=AsyncMock(),
+            next_batch=AsyncMock(return_value=None),
             change_membership=AsyncMock(side_effect=publish_transition),
         )
         bot._ingestion_session = session

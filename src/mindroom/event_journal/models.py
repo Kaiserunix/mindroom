@@ -172,7 +172,7 @@ class DepartureOutcome:
 
 @dataclass(frozen=True, slots=True)
 class RoomMembershipPosition:
-    """The journal-authoritative prior state for one local membership command."""
+    """A canonical membership and epoch within its journal or producer domain."""
 
     membership: str
     membership_epoch: int
