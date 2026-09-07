@@ -23,7 +23,7 @@ Coding model training data often lags recent releases, so never trust memorized 
 | Anthropic | Max intelligence | Claude Fable 5 | `claude-fable-5` |
 | Anthropic | Flagship default | Claude Opus 5 | `claude-opus-5` |
 | Anthropic | Fast / cheap | Claude Haiku 4.5 | `claude-haiku-4-5` |
-| OpenAI | Frontier default | GPT-5.6 | `gpt-5.6` |
+| OpenAI | Frontier default | GPT-6 Astra | `gpt-6-astra` |
 | OpenAI Codex ChatGPT login | Frontier via Codex CLI | GPT-5.6 | `gpt-5.6` |
 | Moonshot Kimi Code login | Frontier via Kimi Code CLI | Kimi K3 | `k3` |
 | Google (Gemini API) | Max intelligence | Gemini 3.1 Pro Preview | `gemini-3.1-pro-preview` |

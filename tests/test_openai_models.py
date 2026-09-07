@@ -154,9 +154,16 @@ def test_openai_responses_supplies_missing_tool_arguments_without_mutating_histo
     assert "arguments" not in assistant.tool_calls[0]["function"]
 
 
-def test_astra_responses_continue_tool_calls_from_the_previous_response() -> None:
-    """Astra tool results must continue the stored reasoning response."""
-    model = MindRoomOpenAIResponses(id="gpt-6-astra", api_key="test-key")
+@pytest.mark.parametrize(
+    "model",
+    [
+        MindRoomOpenAIResponses(id="gpt-6-astra", api_key="test-key"),
+        MindRoomOpenAIResponses(id="reasoning-alias", reasoning_effort="high", api_key="test-key"),
+        MindRoomOpenAIResponses(id="reasoning-alias", reasoning={"effort": "high"}, api_key="test-key"),
+    ],
+)
+def test_reasoning_responses_continue_tool_calls_from_the_previous_response(model: MindRoomOpenAIResponses) -> None:
+    """Explicit reasoning must preserve continuation even for an unknown model alias."""
     assistant = Message(
         role="assistant",
         tool_calls=[
@@ -178,6 +185,25 @@ def test_astra_responses_continue_tool_calls_from_the_previous_response() -> Non
     assert request_params["store"] is True
     assert request_params["previous_response_id"] == "resp_1"
     assert formatted == [{"type": "function_call_output", "call_id": "call_1", "output": "ready"}]
+
+
+def test_explicit_reasoning_respects_disabled_response_storage() -> None:
+    """Reasoning aliases must not turn a stateless request into server-side storage."""
+    model = MindRoomOpenAIResponses(id="reasoning-alias", reasoning_effort="high", store=False, api_key="test-key")
+    messages = [
+        Message(role="assistant", content="Earlier reply", provider_data={"response_id": "resp_1"}),
+        Message(role="user", content="Follow up"),
+    ]
+
+    request_params = model.get_request_params(messages=messages)
+
+    assert request_params["store"] is False
+    assert "previous_response_id" not in request_params
+    assert "reasoning.encrypted_content" in request_params["include"]
+    assert model._format_messages(messages) == [
+        {"role": "assistant", "content": "Earlier reply"},
+        {"role": "user", "content": "Follow up"},
+    ]
 
 
 @pytest.mark.parametrize(("model_cls", "_agno_cls"), _CHAT_WIRE_PAIRS)
