@@ -90,12 +90,16 @@ Message and media obligations remain unsettled only while their callback, gate, 
 Recovery intent travels with queued ingress so pre-existing lane and coalescing workers cannot turn a temporarily unavailable recovered router target into a terminal fallback response.
 Nio 1.0 owns receive cursors, prepared source batches, provenance, and recognition of local membership echoes.
 MindRoom commits each batch's receipt, membership effects, semantic events, and projection together, then runs ordered application hooks before acknowledging that batch.
+Each consumer retains only its latest batch receipt, pruned in the admission transaction; earlier sequences cannot replay.
 A failed admission leaves the batch available for retry; a failure after commit retries its remaining hooks without admitting the semantic events twice.
 The journal retains the last admitted producer membership separately from the tenure attached to existing application work, so adopting an ordinary nio store does not renumber old journal events or deliveries.
 An admitted departure advances the application tenure and invalidates old conversation projections, pending work, approvals, and unsent deliveries.
 Attempted deliveries retain their frozen transaction identity for exact reconciliation.
 MindRoom keeps no separate departure-echo counters or reported-departure alias runs.
 Local joins and leaves use nio's durable membership command, waiting for earlier prepared input to be admitted before choosing the expected producer position.
+MindRoom keeps authoritative joined-member lookups in an application cache for responder and display-name decisions, without changing nio's room members or certifying its projection as complete.
+Nio alone owns encryption recipients and room-key sharing.
+Application lookups are reused until the room projection changes, a membership or history-loss record arrives, or nio replaces the room; concurrent lookups share one request.
 Nio history-loss records create a durable `room_history_recovery` obligation in the same transaction as the batch receipt.
 The obligation exists even when the projection is empty, and recording it retracts completeness for every room and thread marker.
 A repairable room reads as unhydrated for every conversation in it, so the next read walks `/messages` past the prompt window until readable server exhaustion or a configured cost ceiling.

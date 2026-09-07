@@ -38,6 +38,7 @@ snapshots interactive sources and records the batch receipt. Any failure,
 including pending delivery projection, rolls back the entire vector. Redelivery
 of the last receipt performs no semantic effects. An empty completion batch
 still has a receipt and must be acknowledged.
+Only the latest receipt for each consumer is retained; successful admission prunes earlier receipts in the same transaction, and replay of earlier sequences is rejected.
 
 Nio splits membership authorization barriers into singleton batches. The pump
 runs pre-admission hooks, commits, then runs post-admission hooks in vector order
@@ -46,6 +47,8 @@ the receipt already exists; recovered membership never grants new authority.
 Ordinary semantic callbacks run only for newly admitted actionable events.
 Auxiliary nio callbacks and sync completion run at least once until acknowledgement
 and may repeat after a crash or callback failure.
+Application joined-member lookups never write nio's room projection or its completeness flag; nio owns encryption recipient selection and room-key sharing.
+MindRoom caches lookup results separately for responder and display-name decisions, invalidating them on membership or history-loss records and projection changes while sharing concurrent requests within each room lifetime.
 
 Restored decrypted to-device events pass through the same current signed-device
 authentication helper as fresh events, using the original encrypted envelope.

@@ -368,6 +368,12 @@ def admit_ingestion_batch(
         "INSERT INTO matrix_ingestion_receipts (principal_id, stream_id, sequence) VALUES (?, ?, ?)",
         (principal_id, stream, admission.sequence),
     )
+    # Only the latest sequence may replay. This also prunes receipts retained
+    # by older versions when the consumer next admits a batch.
+    transaction.execute(
+        "DELETE FROM matrix_ingestion_receipts WHERE principal_id = ? AND stream_id = ? AND sequence < ?",
+        (principal_id, stream, admission.sequence),
+    )
     return AdmissionFacts(True, any(f.semantic_event_new for f in facts), tuple(facts))
 
 

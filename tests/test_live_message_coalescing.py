@@ -76,6 +76,7 @@ from mindroom.matrix.client import ResolvedVisibleMessage
 from mindroom.matrix.event_info import EventInfo
 from mindroom.matrix.identity import MatrixID
 from mindroom.matrix.journal_ingress import inbound_event
+from mindroom.matrix.room_membership import cached_joined_member_ids, room_membership_is_complete
 from mindroom.matrix.thread_diagnostics import (
     THREAD_HISTORY_DEGRADED_DIAGNOSTIC,
     THREAD_HISTORY_SOURCE_DEGRADED,
@@ -7616,8 +7617,10 @@ async def test_first_router_turn_refreshes_lazy_members_before_mention_routing(t
         outcome = await bot._turn_controller.handle_text_event(room, event)
 
     assert outcome is TurnDispatchOutcome.INTENTIONALLY_IGNORED
-    assert room.members_synced
-    assert mentioned_user_id in room.users
+    assert room_membership_is_complete(room)
+    assert mentioned_user_id in cached_joined_member_ids(room)
+    assert not room.members_synced
+    assert mentioned_user_id not in room.users
 
 
 @pytest.mark.asyncio

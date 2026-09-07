@@ -12,6 +12,7 @@ from nio.durable.codec import restore_event
 import mindroom.event_journal as ej
 from mindroom.event_journal.views import IngestionBatchAdmissionView
 from mindroom.matrix.journal_ingress import ingestion_timeline_views
+from mindroom.matrix.room_membership import invalidate_membership_lookups
 from mindroom.matrix.transport_progress import is_transport_progress_source
 
 __all__ = ["consume_one_ingestion_batch", "run_ingestion_pump", "validate_ingestion_batch"]
@@ -134,6 +135,7 @@ async def consume_one_ingestion_batch(
         account_id=account_id,
         schedule_trigger_sender_is_managed=schedule_trigger_sender_is_managed,
     )
+    invalidate_membership_lookups(batch.records, account_id=account_id)
     if before_admission is not None:
         for record in converted.records:
             before_admission(record)

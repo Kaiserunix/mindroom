@@ -3339,6 +3339,7 @@ depends_on = [
 [[modules]]
 path = "mindroom.commands.handler"
 depends_on = [
+    "mindroom.matrix.room_membership",
     "mindroom.authorization",
     "mindroom.commands.config_commands",
     "mindroom.commands.config_confirmation",
@@ -3767,9 +3768,14 @@ visibility = [
 ]
 
 [[modules]]
+path = "mindroom.matrix.room_membership"
+depends_on = ["mindroom.logging_config"]
+
+[[modules]]
 path = "mindroom.visible_voice_echo"
 depends_on = [
     "mindroom.matrix.room_history_reads",
+    "mindroom.matrix.room_membership",
     "mindroom.authorization",
     "mindroom.background_tasks",
     "mindroom.constants",

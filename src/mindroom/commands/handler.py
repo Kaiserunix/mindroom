@@ -28,6 +28,7 @@ from mindroom.entity_resolution import (
 )
 from mindroom.handled_turns import TurnRecord
 from mindroom.logging_config import get_logger
+from mindroom.matrix.room_membership import cached_member_ids
 from mindroom.requester_identity import resolve_human_requester_alias
 from mindroom.scheduling import (
     SchedulingRuntime,
@@ -260,7 +261,7 @@ def agent_owns_command(
         return True
     if command.type is not CommandType.DESKTOP:
         return False
-    return chat_pairing_desktop_error(config, agent_name) is None and set(room.users) == {
+    return chat_pairing_desktop_error(config, agent_name) is None and cached_member_ids(room) == {
         requester_user_id,
         room.own_user_id,
     }
@@ -285,7 +286,7 @@ async def _desktop_agent_for_room(
         return None
     agent_name, agent_user_id = eligible[0]
     expected_members = {requester_user_id, room.own_user_id, agent_user_id}
-    if set(room.users) != expected_members:
+    if cached_member_ids(room) != expected_members:
         return None
     return agent_name
 
