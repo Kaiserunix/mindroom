@@ -266,13 +266,8 @@ def _apply_membership_effect(
         or ("join" if admission.previous_membership == "join" else "leave") != producer.membership
     ):
         raise IngestionBatchIntegrityError
-    # The first producer observation can adopt a journal with prior tenures.
-    # Keep those epochs: deliveries and journal events already own them.
-    was_joined = membership_position(transaction, principal_id, room_id).membership == "join"
     state = _claim_membership_state(transaction, principal_id, room_id)
-    if admission.membership != "join" and (
-        admission.previous_membership == "join" or (producer is None and was_joined)
-    ):
+    if admission.membership != "join" and admission.previous_membership == "join":
         if state.departure_fenced:
             raise IngestionBatchIntegrityError
         _advance_membership_epoch(transaction, principal_id, room_id)

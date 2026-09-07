@@ -69,7 +69,7 @@ def matrix_delivery_payload(
     return frozen
 
 
-def delivery_payload_json(
+def _delivery_payload_json(
     principal_id: str,
     delivery_id: str,
     stage: DeliveryStage,
@@ -224,7 +224,7 @@ def enqueue(
             membership_epoch,
             encode_thread_id(thread_id),
             transaction_id,
-            delivery_payload_json(principal_id, delivery_id, stage, payload),
+            _delivery_payload_json(principal_id, delivery_id, stage, payload),
             _delivery_result_json(result),
             edits_event_id,
             int(edit_target_pending),

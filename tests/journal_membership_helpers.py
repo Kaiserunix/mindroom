@@ -60,19 +60,3 @@ async def admit_room_membership(
     batch = SyncBatch(consumer.stream_id, int(sequence["next_sequence"]), (record,))
     await principal.admit_ingestion_batch(validate_ingestion_batch(batch, account_id="@fixture:example.org"))
     return await principal.membership_epoch(room_id)
-
-
-async def seed_legacy_room_membership(
-    principal: PrincipalStore,
-    room_id: str,
-    membership: Literal["join", "leave"],
-    *,
-    epoch: int = 1,
-) -> None:
-    """Seed pre-producer journal tenure without creating an ingestion position."""
-    await principal._backend.write(
-        lambda transaction: transaction.execute(
-            "INSERT INTO room_membership (principal_id, room_id, membership_epoch, departure_fenced) VALUES (?, ?, ?, ?)",
-            (principal._principal_id, room_id, epoch, int(membership == "leave")),
-        ),
-    )

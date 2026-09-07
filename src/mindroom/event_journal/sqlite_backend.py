@@ -35,10 +35,8 @@ from typing import TYPE_CHECKING, Any
 
 from mindroom.logging_config import get_logger
 
-from .migrations import finish_matrix_delivery_migration, prepare_matrix_delivery_migration
 from .offloading import ThreadOffload, settled
-from .schema import SQLITE_DIALECT, render, schema_statements
-from .schema_migrations import pre_schema_migration_statements
+from .schema import SQLITE_DIALECT, render, require_current_schema, schema_statements
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -213,30 +211,12 @@ class SqliteBackend:
         _configure(connection, synchronous="FULL")
         connection.execute("BEGIN IMMEDIATE")
         try:
-            interactive_question_columns = frozenset(
-                str(row[1]) for row in connection.execute("PRAGMA table_info(interactive_questions)")
+            existing_tables = frozenset(
+                str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
             )
-            approval_continuation_call_columns = frozenset(
-                str(row[1]) for row in connection.execute("PRAGMA table_info(approval_continuation_calls)")
-            )
-            matrix_delivery_outbox_columns = frozenset(
-                str(row[1]) for row in connection.execute("PRAGMA table_info(matrix_delivery_outbox)")
-            )
-            room_history_recovery_columns = frozenset(
-                str(row[1]) for row in connection.execute("PRAGMA table_info(room_history_recovery)")
-            )
-            for statement in pre_schema_migration_statements(
-                approval_continuation_call_columns=approval_continuation_call_columns,
-                interactive_question_columns=interactive_question_columns,
-                matrix_delivery_outbox_columns=matrix_delivery_outbox_columns,
-                room_history_recovery_columns=room_history_recovery_columns,
-            ):
-                connection.execute(statement)
-            transaction = _SqliteTransaction(connection)
-            migration = prepare_matrix_delivery_migration(transaction, postgres=False)
+            require_current_schema(existing_tables)
             for statement in schema_statements(SQLITE_DIALECT):
                 connection.execute(statement)
-            finish_matrix_delivery_migration(transaction, migration=migration)
             connection.execute("COMMIT")
         except BaseException:
             connection.close()

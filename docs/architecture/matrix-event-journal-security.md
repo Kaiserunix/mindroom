@@ -63,10 +63,8 @@ A team continuation without the versioned structured presentation is rejected in
 
 The decision remains in the exact-call continuation ledger, the terminal edit is another frozen outbox stage, and `approval_action_tombstones` retains the acknowledged card event ID after retirement so duplicate clicks remain consumed.
 
-During the delivery-outbox schema upgrade, already-decided legacy calls keep their first decision and undecided calls expire atomically.
-Known card event IDs are tombstoned so every late click remains inert.
-All legacy approval delivery debt is dropped because its Matrix outcome cannot be reconciled safely without retaining the removed delivery protocol.
-An existing generic outbox without membership and retirement columns is rejected at startup with reset guidance because its rows lack the ownership facts the current schema requires.
+Pre-durable event journals are rejected at startup before their pending work can enter the runtime.
+There are no journal schema or delivery-state conversions during the Nio 1.0 cutover; operators explicitly bind a fresh journal using the [cutover procedure](../deployment/nio-upgrade.md).
 
 ## Sidecar previews are never stored as bodies
 
@@ -155,7 +153,7 @@ A rejoin retains the advanced tenure, so a late acknowledgement cannot project a
 The owned session reuses that consumer identity on restart and rejects a mismatched stream binding.
 A batch committed before a crash is recognized on redelivery, while its pending semantic work remains recoverable from the journal.
 Nio owns the receive cursor; MindRoom's continuity file contains only pending join/decrypt fences.
-Application membership epochs remain stable when an existing journal first adopts a nio producer, whose initial epoch can differ from the journal's retained tenure.
+Pre-durable membership tenures and older continuity-file formats are not adopted.
 
 ## Storage and connections
 

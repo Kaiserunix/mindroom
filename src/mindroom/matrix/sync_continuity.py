@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _RECORD_VERSION = "mindroom-sync-continuity-v4"
-_PREVIOUS_RECORD_VERSIONS = frozenset({"mindroom-sync-continuity-v2", "mindroom-sync-continuity-v3"})
 
 
 @dataclass(frozen=True)
@@ -90,11 +89,7 @@ class SyncContinuityStore:
             raise _format_error(self._path, "unsupported version")
         version = payload.get("version")
         expected_fields = {"pending_join_decrypt_fences", "revision", "version"}
-        if isinstance(version, str) and version in _PREVIOUS_RECORD_VERSIONS:
-            # Older records also held a checkpoint. Only their fences survive:
-            # nio owns the receive cursor, so checkpoint contents are irrelevant.
-            expected_fields.add("checkpoint")
-        elif version != _RECORD_VERSION:
+        if version != _RECORD_VERSION:
             raise _format_error(self._path, "unsupported version")
 
         revision = payload.get("revision")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
@@ -47,52 +46,15 @@ def test_join_fences_round_trip_without_checkpoint_metadata(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("payload", _LEGACY_RECORD_BYTES)
-def test_old_checkpoint_records_restore_pending_fences(tmp_path: Path, payload: str) -> None:
-    """Both former checkpoint formats keep unfinished joins fenced on upgrade."""
+def test_old_checkpoint_records_require_explicit_reset(tmp_path: Path, payload: str) -> None:
+    """Former checkpoint records cannot silently enter the current runtime."""
     path = tmp_path / "sync_continuity" / "code.json"
     path.parent.mkdir(parents=True)
     path.write_text(payload, encoding="utf-8")
 
-    assert SyncContinuityStore(tmp_path, "code").load() == SyncContinuityRecord(
-        revision=2,
-        pending_join_decrypt_fences=frozenset({"!pending:localhost"}),
-    )
+    with pytest.raises(RuntimeError, match="unsupported version"):
+        SyncContinuityStore(tmp_path, "code").load()
     assert path.read_text(encoding="utf-8") == payload
-
-
-@pytest.mark.parametrize("version", ["mindroom-sync-continuity-v2", "mindroom-sync-continuity-v3"])
-@pytest.mark.parametrize("checkpoint", [None, {"token": "s_saved"}, "obsolete"])
-def test_old_record_fences_survive_irrelevant_checkpoint_data(
-    tmp_path: Path,
-    version: str,
-    checkpoint: object,
-) -> None:
-    """Obsolete transport metadata cannot erase or block pending join fences."""
-    path = tmp_path / "sync_continuity" / "code.json"
-    path.parent.mkdir(parents=True)
-    path.write_text(
-        json.dumps(
-            {
-                "version": version,
-                "revision": 7,
-                "checkpoint": checkpoint,
-                "pending_join_decrypt_fences": ["!pending:localhost"],
-            },
-        ),
-        encoding="utf-8",
-    )
-    store = SyncContinuityStore(tmp_path, "code")
-
-    loaded = store.load()
-
-    assert loaded.revision == 7
-    assert loaded.pending_join_decrypt_fences == frozenset({"!pending:localhost"})
-    store.update_join_fences(add={"!new:localhost"})
-    written = json.loads(path.read_text(encoding="utf-8"))
-    assert "checkpoint" not in written
-    assert written["pending_join_decrypt_fences"] == ["!new:localhost", "!pending:localhost"]
-    assert written["revision"] == 8
-    assert store.load().pending_join_decrypt_fences == frozenset({"!new:localhost", "!pending:localhost"})
 
 
 def test_join_fence_updates_retain_add_and_remove_in_one_record(tmp_path: Path) -> None:

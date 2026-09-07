@@ -22,7 +22,6 @@ from mindroom.matrix._owned_session import MatrixCredentials, open_owned_matrix_
 from mindroom.matrix.client_session import create_authenticated_client
 from mindroom.matrix.durable_ingestion import consume_one_ingestion_batch
 from mindroom.orchestrator import _MultiAgentOrchestrator
-from tests.journal_membership_helpers import seed_legacy_room_membership
 from tests.test_bot_ready_hook import _agent_bot
 from tests.test_durable_ingestion_admission import ROOM
 from tests.test_event_journal_store import admit, interactive_edit, interactive_prompt
@@ -223,19 +222,14 @@ async def test_quiesce_is_bounded_when_delivery_projection_cannot_recover(
 
 
 @pytest.mark.asyncio
-async def test_ordinary_store_adoption_preserves_existing_journal_tenure(tmp_path: Path) -> None:
-    """Fresh producer epochs must not reset or block existing journal tenure."""
+@pytest.mark.parametrize("saved_token", [None, "previous-sync"])
+async def test_fresh_journal_keeps_old_history_silent_and_preserves_crypto(
+    tmp_path: Path,
+    saved_token: str | None,
+) -> None:
+    """A crypto-store upgrade must not enqueue old history, even without dedup rows."""
     bot = _agent_bot(tmp_path)
     principal = bot.journal_principal()
-    await seed_legacy_room_membership(principal, ROOM, "join")
-    await admit(principal, "$existing", sender="@alice:example.org")
-    await principal.enqueue_matrix_delivery(
-        delivery_id="$existing",
-        stage=DeliveryStage.FINAL,
-        room_id=ROOM,
-        thread_id=None,
-        payload={"msgtype": "m.text", "body": "answer"},
-    )
     legacy = create_authenticated_client(
         "https://localhost",
         bot.agent_user.user_id,
@@ -243,35 +237,49 @@ async def test_ordinary_store_adoption_preserves_existing_journal_tenure(tmp_pat
         "token",
         bot.runtime_paths,
     )
-    await legacy.close()
+    assert legacy.olm is not None
+    identity_keys = legacy.olm.account.identity_keys
     assert legacy.store is not None
+    if saved_token is not None:
+        legacy.store.save_sync_token(saved_token)
+    await legacy.close()
     legacy.store.database.close()
+
+    def frame(event_id: str, token: str) -> bytes:
+        body = json.loads(
+            _joined_frame(
+                [
+                    {
+                        "type": "m.room.message",
+                        "event_id": event_id,
+                        "sender": "@alice:example.org",
+                        "origin_server_ts": 100,
+                        "content": {"msgtype": "m.text", "body": "Please answer this request"},
+                    },
+                ],
+            ),
+        )
+        body["next_batch"] = token
+        return json.dumps(body).encode()
+
     async with _owned_session(bot) as session:
-        await _consume_frame(bot, session, _joined_frame([]))
-        assert await principal.membership_epoch(ROOM) == 1
-        assert await principal.load_event("$existing") is not None
-        delivery = await principal.load_matrix_delivery(delivery_id="$existing", stage=DeliveryStage.FINAL)
-        assert delivery is not None
-        assert not delivery.retired
-        assert delivery.membership_epoch == 1
-        assert await principal.ingestion_membership_position(ROOM) == RoomMembershipPosition("join", 0)
-        session._transport.request = AsyncMock(return_value=b"{}")
-        assert await AgentBot._change_local_membership(bot, ROOM, "leave")
-        await consume_one_ingestion_batch(session, principal, account_id=bot.agent_user.user_id)
-        assert await principal.membership_position(ROOM) == RoomMembershipPosition("leave", 2)
-        delivery = await principal.load_matrix_delivery(delivery_id="$existing", stage=DeliveryStage.FINAL)
-        assert delivery is not None
-        assert delivery.retired
-        leave_frame = json.loads(_joined_frame([]))
-        leave_frame["rooms"]["leave"] = leave_frame["rooms"].pop("join")
-        await _consume_frame(bot, session, json.dumps(leave_frame).encode())
+        assert bot.client is not None
+        assert bot.client.olm is not None
+        assert bot.client.olm.account.identity_keys == identity_keys
+        await _consume_frame(bot, session, frame("$old-request", "baseline"))
+        assert await principal.load_event("$old-request") is not None
+        assert not await principal.pending()
+        await _consume_frame(bot, session, frame("$new-request", "live"))
+        assert [event.event_id for event in await principal.pending()] == ["$new-request"]
+        await principal.settle("$new-request")
+
     async with _owned_session(bot) as session:
-        assert await principal.ingestion_membership_position(ROOM) == RoomMembershipPosition("leave", 1)
-        session._transport.request = AsyncMock(return_value=b"{}")
-        assert await AgentBot._change_local_membership(bot, ROOM, "join")
-        await consume_one_ingestion_batch(session, principal, account_id=bot.agent_user.user_id)
-        assert await principal.membership_position(ROOM) == RoomMembershipPosition("join", 2)
-        await _consume_frame(bot, session, _joined_frame([]))
+        await _consume_frame(bot, session, frame("$old-request", "history-repeated"))
+        assert not await principal.pending()
+        await _consume_frame(bot, session, frame("$new-request", "duplicate"))
+        assert not await principal.pending()
+        await _consume_frame(bot, session, frame("$after-restart", "after-restart"))
+        assert [event.event_id for event in await principal.pending()] == ["$after-restart"]
         assert await session.next_batch() is None
 
 
@@ -283,7 +291,6 @@ async def test_startup_cleanup_leaves_room_before_first_membership_observation(
     """Unknown producer state cannot certify that a server-joined room was left."""
     bot = _agent_bot(tmp_path)
     principal = bot.journal_principal()
-    await seed_legacy_room_membership(principal, ROOM, "join")
     bot._room_lifecycle.deps = replace(
         bot._room_lifecycle.deps,
         change_membership=AgentBot._change_local_membership.__get__(bot),
@@ -312,7 +319,7 @@ async def test_startup_cleanup_leaves_room_before_first_membership_observation(
             assert len(leave_requests) == 1
             facts = await consume_one_ingestion_batch(session, principal, account_id=bot.agent_user.user_id)
             assert facts is not None
-            assert await principal.membership_position(ROOM) == RoomMembershipPosition("leave", 2)
+            assert await principal.membership_position(ROOM) == RoomMembershipPosition("leave", 0)
             assert await principal.ingestion_membership_position(ROOM) == RoomMembershipPosition("leave", 0)
         finally:
             runner.cancel()
