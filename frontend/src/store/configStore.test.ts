@@ -70,6 +70,152 @@ describe("configStore", () => {
     vi.clearAllMocks();
   });
 
+  describe.each(["structured", "raw"] as const)(
+    "%s configuration conflicts",
+    (mode) => {
+      const conflictMessage =
+        "Configuration changed elsewhere. Your draft has not been saved. Copy any changes you want to keep, then refresh this page and reapply them.";
+      const save = () =>
+        mode === "structured"
+          ? useConfigStore.getState().saveConfig()
+          : useConfigStore.getState().saveRecoveryConfigSource();
+      const edit = () =>
+        mode === "structured"
+          ? useConfigStore
+              .getState()
+              .updateModel("default", { provider: "test", id: "newer-edit" })
+          : useConfigStore
+              .getState()
+              .updateRecoveryConfigSource("agents: {}\n# newer edit\n");
+
+      beforeEach(() => {
+        const config: Config = {
+          agents: {},
+          models: { default: { provider: "test", id: "local-edit" } },
+          memory: {
+            embedder: { provider: "test", config: { model: "test-embedder" } },
+          },
+          defaults: { markdown: true },
+          router: { model: "default" },
+        };
+        useConfigStore.setState({
+          committedGeneration: 7,
+          config: mode === "structured" ? config : null,
+          loadedConfig: mode === "structured" ? config : null,
+          recoveryConfigSource:
+            mode === "raw" ? "agents: {}\n# local edit\n" : null,
+          recoveryConfigSourceOriginal: mode === "raw" ? "agents: {}\n" : null,
+          isDirty: true,
+          syncStatus: "error",
+        });
+      });
+
+      it.each([false, true])(
+        "reports a server conflict and preserves the draft (newer edits: %s)",
+        async (newerEdits) => {
+          const response = deferred<Response>();
+          vi.mocked(fetch).mockReturnValueOnce(response.promise);
+          const savePromise = save();
+          if (newerEdits) edit();
+          const draft = useConfigStore.getState();
+          response.resolve(
+            new Response(
+              JSON.stringify({
+                detail:
+                  "Configuration changed while request was in progress. Retry the operation.",
+              }),
+              { status: 409 },
+            ),
+          );
+
+          const result = await savePromise;
+          expect(result).toEqual({
+            status: "error",
+            message: conflictMessage,
+            diagnostics: [
+              {
+                kind: "global",
+                message: conflictMessage,
+                blocking: mode === "raw",
+              },
+            ],
+          });
+          expect(useConfigStore.getState()).toMatchObject({
+            config: draft.config,
+            recoveryConfigSource: draft.recoveryConfigSource,
+            recoveryConfigSourceOriginal: draft.recoveryConfigSourceOriginal,
+            committedGeneration: 7,
+            draftVersion: draft.draftVersion,
+            isDirty: true,
+            isLoading: false,
+            syncStatus: "error",
+            diagnostics: result.status === "error" ? result.diagnostics : [],
+          });
+          // A rejected full replacement must not refresh the generation and retry implicitly.
+          expect(fetch).toHaveBeenCalledTimes(1);
+          expect(fetch).toHaveBeenCalledWith(
+            mode === "structured" ? "/api/config/save" : "/api/config/raw",
+            expect.objectContaining({
+              method: "PUT",
+              headers: expect.objectContaining({
+                "x-mindroom-config-generation": "7",
+              }),
+            }),
+          );
+        },
+      );
+
+      it("keeps draft validation diagnostics without duplicating the conflict on retry", async () => {
+        const validationDiagnostic = {
+          kind: "validation" as const,
+          issue: {
+            loc: ["agents", "helper", "role"],
+            msg: "role is required",
+            type: "value_error",
+          },
+        };
+        useConfigStore.setState({ diagnostics: [validationDiagnostic] });
+        vi.mocked(fetch).mockImplementation(
+          async () =>
+            new Response(JSON.stringify({ detail: "Configuration changed" }), {
+              status: 409,
+            }),
+        );
+
+        await save();
+        await save();
+
+        expect(useConfigStore.getState().diagnostics).toEqual([
+          { kind: "global", message: conflictMessage, blocking: mode === "raw" },
+          validationDiagnostic,
+        ]);
+        expect(useConfigStore.getState().committedGeneration).toBe(7);
+        expect(fetch).toHaveBeenCalledTimes(2);
+      });
+
+      it("ignores a conflict from a save superseded by a newer request", async () => {
+        const response = deferred<Response>();
+        vi.mocked(fetch).mockReturnValueOnce(response.promise);
+        const savePromise = save();
+        useConfigStore.setState({
+          saveConfigRequestId: 2,
+          syncStatus: "syncing",
+        });
+        response.resolve(
+          new Response(JSON.stringify({ detail: "Configuration changed" }), {
+            status: 409,
+          }),
+        );
+
+        expect(await savePromise).toEqual({ status: "stale" });
+        expect(useConfigStore.getState()).toMatchObject({
+          diagnostics: [],
+          syncStatus: "syncing",
+        });
+      });
+    },
+  );
+
   describe("loadConfig", () => {
     it("should load configuration successfully", async () => {
       const mockConfig = {

@@ -31,6 +31,8 @@ import {
 
 const AGENT_POLICIES_ERROR_MESSAGE = "Failed to derive agent policies";
 const CONFIG_VALIDATION_FAILED_MESSAGE = "Configuration validation failed";
+const CONFIG_CONFLICT_MESSAGE =
+  "Configuration changed elsewhere. Your draft has not been saved. Copy any changes you want to keep, then refresh this page and reapply them.";
 
 export type SaveConfigResult =
   | { status: "saved" }
@@ -153,6 +155,20 @@ function firstGlobalDiagnosticMessage(
     diagnostics.find((diagnostic) => diagnostic.kind === "global")?.message ??
     fallbackMessage
   );
+}
+
+function configConflictDiagnostics(
+  diagnostics: ConfigDiagnostic[],
+  blocking: boolean,
+): ConfigDiagnostic[] {
+  return [
+    ...globalDiagnostics(CONFIG_CONFLICT_MESSAGE, blocking),
+    ...retainedDraftDiagnostics(diagnostics).filter(
+      (diagnostic) =>
+        diagnostic.kind !== "global" ||
+        diagnostic.message !== CONFIG_CONFLICT_MESSAGE,
+    ),
+  ];
 }
 
 function nextDraftVersion(draftVersion: number): number {
@@ -1144,16 +1160,25 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         return { status: "stale" };
       }
       const currentState = get();
+      if (error instanceof configService.ConfigStaleError) {
+        const errorDiagnostics = configConflictDiagnostics(
+          currentState.diagnostics,
+          false,
+        );
+        set({
+          diagnostics: errorDiagnostics,
+          isLoading: false,
+          syncStatus: "error",
+        });
+        return {
+          status: "error",
+          message: CONFIG_CONFLICT_MESSAGE,
+          diagnostics: errorDiagnostics,
+        };
+      }
       const draftChangedSinceSaveStarted =
         currentState.draftVersion !== savedDraftVersion;
       if (draftChangedSinceSaveStarted) {
-        set({
-          isLoading: false,
-          syncStatus: draftSyncStatus(currentState),
-        });
-        return { status: "stale" };
-      }
-      if (error instanceof configService.ConfigStaleError) {
         set({
           isLoading: false,
           syncStatus: draftSyncStatus(currentState),
@@ -1317,16 +1342,25 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         return { status: "stale" };
       }
       const currentState = get();
+      if (error instanceof configService.ConfigStaleError) {
+        const errorDiagnostics = configConflictDiagnostics(
+          currentState.diagnostics,
+          true,
+        );
+        set({
+          diagnostics: errorDiagnostics,
+          isLoading: false,
+          syncStatus: "error",
+        });
+        return {
+          status: "error",
+          message: CONFIG_CONFLICT_MESSAGE,
+          diagnostics: errorDiagnostics,
+        };
+      }
       const draftChangedSinceSaveStarted =
         currentState.draftVersion !== savedDraftVersion;
       if (draftChangedSinceSaveStarted) {
-        set({
-          isLoading: false,
-          syncStatus: draftSyncStatus(currentState),
-        });
-        return { status: "stale" };
-      }
-      if (error instanceof configService.ConfigStaleError) {
         set({
           isLoading: false,
           syncStatus: draftSyncStatus(currentState),
