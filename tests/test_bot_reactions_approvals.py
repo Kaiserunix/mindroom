@@ -85,6 +85,7 @@ from tests.conftest import (
     runtime_paths_for,
     unwrap_extracted_collaborator,
 )
+from tests.journal_membership_helpers import admit_room_membership
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -807,10 +808,7 @@ class TestAgentBot(AgentBotTestBase):
             await _dispatch_reaction(bot, room, event)
             await bot._response_runner.drain_inbox_responses()
 
-        await bot.journal_principal().fence_departure(
-            room.room_id,
-            source=DepartureSource.LOCAL,
-        )
+        await admit_room_membership(bot.journal_principal(), room.room_id, "leave", source=DepartureSource.LOCAL)
 
         assert event.event_id not in await bot._journal_dispatcher.unsettled_event_ids()
         rows = await bot._journal_store.backend.read(

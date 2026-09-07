@@ -77,9 +77,7 @@ class BotRoomLifecycleDeps:
     send_response: _SendRoomResponse
     change_membership: _ChangeRoomMembership
     admit_response: Callable[[], AbstractAsyncContextManager[None]]
-    on_room_joined: Callable[[str], Awaitable[None]]
     on_configured_room_joined: Callable[[str], Awaitable[None]]
-    on_room_left: Callable[[str], Awaitable[None]]
 
 
 class BotRoomLifecycle:
@@ -209,11 +207,6 @@ class BotRoomLifecycle:
             ),
         )
 
-    async def _on_configured_room_joined(self, room_id: str) -> None:
-        """Apply common join state before configured-room setup."""
-        await self.deps.on_room_joined(room_id)
-        await self.deps.on_configured_room_joined(room_id)
-
     def _invited_rooms_file_path(self) -> Path:
         """Return the durable path for invited room IDs for this entity."""
         return invited_rooms_path(self.deps.runtime_paths.storage_root, self.deps.agent_name)
@@ -318,7 +311,7 @@ class BotRoomLifecycle:
             if room_id in current_rooms:
                 self._logger().debug("Already joined room", room_id=room_id)
                 if await self.deps.change_membership(room_id, "join"):
-                    await self._on_configured_room_joined(room_id)
+                    await self.deps.on_configured_room_joined(room_id)
                 else:
                     self._logger().warning(
                         "Failed to reconcile joined room",
@@ -329,7 +322,7 @@ class BotRoomLifecycle:
             if await self._join_room_with_decrypt_notice_fence(room_id):
                 current_rooms.add(room_id)
                 self._logger().info("Joined room", room_id=room_id)
-                await self._on_configured_room_joined(room_id)
+                await self.deps.on_configured_room_joined(room_id)
             else:
                 self._logger().warning("Failed to join room", room_id=room_id)
 
@@ -339,7 +332,6 @@ class BotRoomLifecycle:
         await leave_non_dm_rooms(
             client,
             room_ids if room_ids is not None else await self._rooms_to_leave(),
-            on_room_left=self.deps.on_room_left,
             leave_room_action=lambda room_id: self.deps.change_membership(
                 room_id,
                 "leave",
@@ -365,7 +357,6 @@ class BotRoomLifecycle:
                 await leave_non_dm_rooms(
                     client,
                     joined_rooms,
-                    on_room_left=self.deps.on_room_left,
                     leave_room_action=leave,
                 )
         except Exception:
@@ -541,7 +532,6 @@ class BotRoomLifecycle:
 
             if room.room_id in self._handled_invite_room_ids:
                 self._logger().debug("Invite already handled", room_id=room.room_id, sender=sender)
-                await self.deps.on_room_joined(room.room_id)
                 self._remember_invited_room(room.room_id)
                 await self._send_invite_welcome(room.room_id, sender)
                 self._forget_pending_room_invite(room.room_id)
@@ -551,7 +541,6 @@ class BotRoomLifecycle:
                 if not await self.deps.change_membership(room.room_id, "join"):
                     msg = f"Failed to reconcile joined invited room {room.room_id}"
                     raise RuntimeError(msg)
-                await self.deps.on_room_joined(room.room_id)
                 self._remember_invited_room(room.room_id)
                 await self._send_invite_welcome(room.room_id, sender)
                 self._forget_pending_room_invite(room.room_id)
@@ -572,7 +561,6 @@ class BotRoomLifecycle:
                 raise RuntimeError(msg)
 
             self._logger().info("Joined room", room_id=room.room_id)
-            await self.deps.on_room_joined(room.room_id)
             self._remember_invited_room(room.room_id)
             self._handled_invite_room_ids.add(room.room_id)
             await self._send_invite_welcome(room.room_id, sender)

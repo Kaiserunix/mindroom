@@ -137,37 +137,10 @@ class DeliveryStage(StrEnum):
 
 
 class DepartureSource(StrEnum):
-    """Which of the two observers of one departure is speaking."""
+    """The producer source of one admitted membership transition."""
 
-    # The bot left the room itself, and knows a sync report of it is coming.
     LOCAL = "local"
-    # A sync response reported a departure, which may be the report a local
-    # departure is owed, or a departure the bot never initiated.
     REPORTED = "reported"
-
-
-class DepartureObservation(StrEnum):
-    """What one observation of a departure did to the room's derived state."""
-
-    FENCED = "fenced"
-    # The sync report a local departure was waiting for. Fencing again would
-    # delete whatever the membership after it has already built.
-    OWED_REPORT_CONSUMED = "owed_report_consumed"
-    # The same departure observed again, by either observer, with no rejoin in
-    # between for a second departure to have happened in.
-    ALREADY_FENCED = "already_fenced"
-    # The same stable Matrix departure observation was replayed after its first
-    # application had already committed.
-    REPEATED_REPORT = "repeated_report"
-
-
-@dataclass(frozen=True, slots=True)
-class DepartureOutcome:
-    """What one durably applied departure observation decided."""
-
-    observation: DepartureObservation
-    membership_epoch: int
-    owed_reports: int
 
 
 @dataclass(frozen=True, slots=True)

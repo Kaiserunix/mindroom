@@ -65,8 +65,6 @@ if TYPE_CHECKING:
         AdmissionFacts,
         ConversationCursor,
         ConversationPage,
-        DepartureOutcome,
-        DepartureSource,
         EventKind,
         HydrationCoverage,
         InboundEvent,
@@ -366,24 +364,6 @@ class PrincipalStore:
             ),
         )
 
-    async def fence_departure(
-        self,
-        room_id: str,
-        *,
-        source: DepartureSource,
-        report_observation_id: str | None = None,
-    ) -> DepartureOutcome:
-        """Apply one observation of a departure, invalidating at most once per departure."""
-        return await self._backend.write(
-            lambda transaction: journal.fence_departure(
-                transaction,
-                self._principal_id,
-                room_id,
-                source=source,
-                report_observation_id=report_observation_id,
-            ),
-        )
-
     async def claim_interactive_reaction(
         self,
         *,
@@ -410,64 +390,6 @@ class PrincipalStore:
                 self._principal_id,
                 source_event_id=source_event_id,
             ),
-        )
-
-    async def note_membership_restarted(
-        self,
-        room_id: str,
-        *,
-        expected_membership_epoch: int | None = None,
-    ) -> None:
-        """Rearm one room after a confirmed join."""
-        await self._backend.write(
-            lambda transaction: journal.note_membership_restarted(
-                transaction,
-                self._principal_id,
-                room_id,
-                expected_membership_epoch=expected_membership_epoch,
-            ),
-        )
-
-    async def close_preceding_reported_departure(
-        self,
-        room_id: str,
-        join_event_id: str,
-    ) -> None:
-        """Close the reported departure immediately preceding one join."""
-        await self._backend.write(
-            lambda transaction: journal.close_preceding_reported_departure(
-                transaction,
-                self._principal_id,
-                room_id,
-                join_event_id,
-            ),
-        )
-
-    async def close_reported_departure_run(
-        self,
-        room_id: str,
-        run_epoch: int,
-    ) -> None:
-        """Close one contiguous reported-departure run."""
-        await self._backend.write(
-            lambda transaction: journal.close_reported_departure_run(
-                transaction,
-                self._principal_id,
-                room_id,
-                run_epoch,
-            ),
-        )
-
-    async def retire_owed_departure_reports(self, room_id: str) -> None:
-        """Forget sync reports that can no longer arrive for one room."""
-        await self._backend.write(
-            lambda transaction: journal.retire_owed_departure_reports(transaction, self._principal_id, room_id),
-        )
-
-    async def rooms_owing_departure_reports(self) -> frozenset[str]:
-        """Return every room whose local departure is still owed a sync report."""
-        return await self._backend.read(
-            lambda transaction: journal.rooms_owing_departure_reports(transaction, self._principal_id),
         )
 
     async def read_conversation(

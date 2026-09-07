@@ -104,7 +104,7 @@ The MCP manager callback schedules an orchestrator-owned background task so the 
    The gate is global and covers the whole apply window regardless of how narrow the plan turns out to be.
    When the apply finishes, responses owned by unchanged or replacement runtimes compete for admission normally.
 6. A runtime being replaced wakes its pre-admission waiters with `ResponseAdmissionRefusedError`.
-   This is deliberately not an `asyncio.CancelledError`, because the Matrix callback must fail and invalidate the old sync checkpoint so the replacement runtime replays the source event.
+   The refusal leaves the admitted source pending in the event journal so the replacement runtime can replay it.
    The refusal path performs no Matrix I/O, so replacement shutdown cannot stall on an untimed send.
    Auto-resume messages received by replacement bots during the apply wait for the gate to reopen instead of being dropped.
 7. If responses never drain, either replacement flow stops deferring after 600 seconds and closes the gate over still-running responses.

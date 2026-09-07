@@ -54,6 +54,7 @@ from tests.conftest import (
     test_runtime_paths,
 )
 from tests.identity_helpers import entity_ids
+from tests.journal_membership_helpers import admit_room_membership
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -65,10 +66,10 @@ _DURABLE_MEMBERSHIP_GATEWAY = AgentBot._change_local_membership
 
 
 @pytest.fixture(autouse=True)
-def _legacy_membership_transport_for_invite_business_tests(
+def _membership_transport_for_invite_business_tests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Keep pre-cutover invite fixtures focused on policy, not nio ownership."""
+    """Keep invite policy fixtures on their mocked Matrix transport."""
 
     async def change_membership(
         bot: AgentBot,
@@ -78,26 +79,24 @@ def _legacy_membership_transport_for_invite_business_tests(
         client = bot.client
         assert client is not None
         if target_membership == "join":
+            position = await bot.journal_principal().ingestion_membership_position(room_id)
             client_rooms = client.rooms
             if (
                 isinstance(client_rooms, dict)
                 and room_id in client_rooms
-                and room_id not in bot._local_departures_awaiting_sync
+                and (position is None or position.membership == "join")
             ):
-                await bot.journal_principal().note_membership_restarted(room_id)
+                await admit_room_membership(bot.journal_principal(), room_id, "join")
                 return True
             joined = await client_room_admin.join_room(client, room_id)
             if joined is RoomJoinOutcome.JOINED:
-                await bot.journal_principal().note_membership_restarted(room_id)
+                await admit_room_membership(bot.journal_principal(), room_id, "join")
                 return True
             return False
         assert target_membership == "leave"
         left = await client_room_admin.leave_room(client, room_id)
         if left:
-            await bot.journal_principal().fence_departure(
-                room_id,
-                source=DepartureSource.LOCAL,
-            )
+            await admit_room_membership(bot.journal_principal(), room_id, "leave", source=DepartureSource.LOCAL)
         return left
 
     monkeypatch.setattr(AgentBot, "_change_local_membership", change_membership)
@@ -635,7 +634,6 @@ async def test_unconfigured_leave_uses_durable_gateway_without_direct_http(
         current_membership="leave",
     )
     bot.client.room_leave.assert_not_awaited()
-    assert bot._local_departures_awaiting_sync == {room_id}
 
 
 @pytest.mark.asyncio
@@ -703,13 +701,13 @@ async def test_stale_client_room_after_leave_cannot_reopen_cache(
     monkeypatch.setattr("mindroom.bot_room_lifecycle.get_joined_rooms", AsyncMock(return_value=[]))
     monkeypatch.setattr("mindroom.matrix.client_room_admin.join_room", join_room)
 
-    await bot._fence_left_room(room_id)
+    await admit_room_membership(bot.journal_principal(), room_id, "leave")
     with pytest.raises(RuntimeError) as raised:
         await bot.join_configured_rooms()
 
     assert raised.value is failure
     join_room.assert_awaited_once_with(bot.client, room_id)
-    assert bot._local_departures_awaiting_sync == {room_id}
+    assert await bot.journal_principal().membership_position(room_id) == RoomMembershipPosition("leave", 1)
     assert bot._room_lifecycle.decrypt_notice_is_fenced(room_id)
 
 
@@ -1264,10 +1262,9 @@ async def test_router_cleanup_preserves_room_created_after_lifecycle_loaded(
         _client: AsyncMock,
         room_ids: list[str],
         *,
-        on_room_left: Callable[[str], Awaitable[None]],
         leave_room_action: Callable[[str], Awaitable[bool]],
     ) -> list[str]:
-        del on_room_left, leave_room_action
+        del leave_room_action
         left_room_ids.extend(room_ids)
         return room_ids
 
@@ -1490,7 +1487,7 @@ async def test_router_departure_allows_fresh_reinvite(
     await _handle_invite(bot, room, event)
     bot.client.rooms[room_id] = MagicMock()
     bot._room_lifecycle.forget_invited_room(room_id)
-    bot._local_departures_awaiting_sync.add(room_id)
+    await admit_room_membership(bot.journal_principal(), room_id, "leave")
     await _handle_invite(bot, room, event)
 
     assert join_room.await_count == 2
@@ -2189,13 +2186,10 @@ async def test_router_leave_unconfigured_rooms_preserves_persisted_invited_room(
         _client: AsyncMock,
         room_ids: list[str],
         *,
-        on_room_left: Callable[[str], Awaitable[None]],
         leave_room_action: Callable[[str], Awaitable[bool]] | None = None,
     ) -> list[str]:
         left_room_ids.extend(room_ids)
         del leave_room_action
-        for room_id in room_ids:
-            await on_room_left(room_id)
         return room_ids
 
     monkeypatch.setattr(
@@ -2306,7 +2300,6 @@ async def test_agent_leaves_unconfigured_rooms(monkeypatch: pytest.MonkeyPatch, 
     # Verify the bot left room2 (unconfigured) but not room1 (configured)
     assert len(left_rooms) == 1
     assert "!room2:localhost" in left_rooms
-    assert bot._local_departures_awaiting_sync == {"!room2:localhost"}
 
 
 @pytest.mark.asyncio
@@ -2340,13 +2333,10 @@ async def test_router_preserves_root_space_when_leaving_unconfigured_rooms(
         _client: AsyncMock,
         room_ids: list[str],
         *,
-        on_room_left: Callable[[str], Awaitable[None]],
         leave_room_action: Callable[[str], Awaitable[bool]] | None = None,
     ) -> list[str]:
         left_room_ids.extend(room_ids)
         del leave_room_action
-        for room_id in room_ids:
-            await on_room_left(room_id)
         return room_ids
 
     monkeypatch.setattr(
@@ -2823,13 +2813,10 @@ async def test_leave_unconfigured_rooms_preserves_persisted_invited_room(
         _client: AsyncMock,
         room_ids: list[str],
         *,
-        on_room_left: Callable[[str], Awaitable[None]],
         leave_room_action: Callable[[str], Awaitable[bool]] | None = None,
     ) -> list[str]:
         left_room_ids.extend(room_ids)
         del leave_room_action
-        for room_id in room_ids:
-            await on_room_left(room_id)
         return room_ids
 
     monkeypatch.setattr(

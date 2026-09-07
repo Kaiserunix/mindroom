@@ -144,23 +144,18 @@ Old-membership recovery never sends and retires the row only after exact reconci
 
 Every outbox row freezes the membership epoch that authorized it, and acknowledgement projects its Matrix event only while that exact membership remains current.
 
-One departure reaches the bot twice, locally and again in the sync response that reports it, and both must fence exactly once.
-
-Fencing twice is not merely wasteful — if the bot rejoined in between, the second fence deletes the conversation it has already hydrated under the new membership, along with any answer queued for it.
-
-The bookkeeping that decides which observation is a repeat is durable and counted rather than a flag, because leave/rejoin/leave owes two reports and it has to survive a restart between a local departure and its report.
+Nio owns durable recognition of local membership commands and their later sync echoes.
+MindRoom applies the producer's ordered membership transitions once per admitted batch and retains application tenure fencing without a second echo protocol.
+A departure advances that tenure and invalidates work authorized by the ended membership.
+A rejoin retains the advanced tenure, so a late acknowledgement cannot project an older delivery into the new conversation.
 
 ## Restart
 
-A Matrix sync token is only meaningful next to the store that consumed the events it already covers.
-
-`journal_identity` holds a single generation, written once when the database is first opened and never rewritten.
-
-A saved sync checkpoint records that generation, and a checkpoint naming a different one is refused, so a bot resuming against a database that no longer exists starts cold instead of skipping every event in between.
-
-Only startup refuses a checkpoint this way.
-
-A room departure deliberately does not discard the global position, because that room is already fenced by its own membership epoch and dropping the checkpoint would resync every other room with it.
+`matrix_sync_consumers` binds each principal's durable consumer generation to one nio stream and records its next batch sequence.
+The owned session reuses that consumer identity on restart and rejects a mismatched stream binding.
+A batch committed before a crash is recognized on redelivery, while its pending semantic work remains recoverable from the journal.
+Nio owns the receive cursor; MindRoom's continuity file contains only pending join/decrypt fences.
+Application membership epochs remain stable when an existing journal first adopts a nio producer, whose initial epoch can differ from the journal's retained tenure.
 
 ## Storage and connections
 

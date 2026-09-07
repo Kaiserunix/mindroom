@@ -17,11 +17,12 @@ from nio.durable.transport import HttpError
 
 from mindroom.bot import AgentBot
 from mindroom.constants import ROUTER_AGENT_NAME
-from mindroom.event_journal import DeliveryStage, DepartureSource, RoomMembershipPosition
+from mindroom.event_journal import DeliveryStage, RoomMembershipPosition
 from mindroom.matrix._owned_session import MatrixCredentials, open_owned_matrix_session
 from mindroom.matrix.client_session import create_authenticated_client
 from mindroom.matrix.durable_ingestion import consume_one_ingestion_batch
 from mindroom.orchestrator import _MultiAgentOrchestrator
+from tests.journal_membership_helpers import seed_legacy_room_membership
 from tests.test_bot_ready_hook import _agent_bot
 from tests.test_durable_ingestion_admission import ROOM
 from tests.test_event_journal_store import admit, interactive_edit, interactive_prompt
@@ -226,8 +227,7 @@ async def test_ordinary_store_adoption_preserves_existing_journal_tenure(tmp_pat
     """Fresh producer epochs must not reset or block existing journal tenure."""
     bot = _agent_bot(tmp_path)
     principal = bot.journal_principal()
-    await principal.fence_departure(ROOM, source=DepartureSource.LOCAL)
-    await principal.note_membership_restarted(ROOM)
+    await seed_legacy_room_membership(principal, ROOM, "join")
     await admit(principal, "$existing", sender="@alice:example.org")
     await principal.enqueue_matrix_delivery(
         delivery_id="$existing",
@@ -246,10 +246,8 @@ async def test_ordinary_store_adoption_preserves_existing_journal_tenure(tmp_pat
     await legacy.close()
     assert legacy.store is not None
     legacy.store.database.close()
-    bot._local_departures_awaiting_sync.add(ROOM)
     async with _owned_session(bot) as session:
         await _consume_frame(bot, session, _joined_frame([]))
-        assert ROOM not in bot._local_departures_awaiting_sync
         assert await principal.membership_epoch(ROOM) == 1
         assert await principal.load_event("$existing") is not None
         delivery = await principal.load_matrix_delivery(delivery_id="$existing", stage=DeliveryStage.FINAL)
@@ -285,8 +283,7 @@ async def test_startup_cleanup_leaves_room_before_first_membership_observation(
     """Unknown producer state cannot certify that a server-joined room was left."""
     bot = _agent_bot(tmp_path)
     principal = bot.journal_principal()
-    await principal.fence_departure(ROOM, source=DepartureSource.LOCAL)
-    await principal.note_membership_restarted(ROOM)
+    await seed_legacy_room_membership(principal, ROOM, "join")
     bot._room_lifecycle.deps = replace(
         bot._room_lifecycle.deps,
         change_membership=AgentBot._change_local_membership.__get__(bot),
@@ -412,7 +409,7 @@ async def test_removal_cleanup_bounds_wait_for_stopped_ingestion(
             assert await session.next_batch() is not None
         finally:
             for task in asyncio.all_tasks():
-                if task.get_name() == "matrix_leave_room_and_cleanup":
+                if task.get_name() == "matrix_leave_room":
                     task.cancel()
             cleanup.cancel()
             await asyncio.gather(cleanup, return_exceptions=True)

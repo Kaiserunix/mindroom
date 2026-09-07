@@ -67,6 +67,7 @@ from tests.conftest import (
     runtime_paths_for,
     test_runtime_paths,
 )
+from tests.journal_membership_helpers import admit_room_membership
 from tests.test_turn_store import _store
 
 if TYPE_CHECKING:
@@ -3161,8 +3162,8 @@ class TestGenericDeliveryDeviceChangePolicy:
             stage=DeliveryStage.FINAL,
             sending_device_id="OLD-DEVICE",
         )
-        await alice.fence_departure(_ROOM_ID, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(_ROOM_ID)
+        await admit_room_membership(alice, _ROOM_ID, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, _ROOM_ID, "join")
         send = AsyncMock(return_value="$duplicate-edit")
         resolve = AsyncMock(return_value="$original-edit")
         worker = MatrixDeliveryWorker(
@@ -3207,8 +3208,8 @@ class TestGenericDeliveryDeviceChangePolicy:
             )
             is not None
         )
-        await alice.fence_departure(_ROOM_ID, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(_ROOM_ID)
+        await admit_room_membership(alice, _ROOM_ID, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, _ROOM_ID, "join")
         send = AsyncMock(return_value="$stale-answer")
         resolve = AsyncMock(return_value=None)
         worker = MatrixDeliveryWorker(
@@ -3257,8 +3258,8 @@ class TestGenericDeliveryDeviceChangePolicy:
         )
         sending = asyncio.create_task(live.flush(delivery_id="turn-1", stage=DeliveryStage.FINAL))
         await send_started.wait()
-        await alice.fence_departure(_ROOM_ID, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(_ROOM_ID)
+        await admit_room_membership(alice, _ROOM_ID, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, _ROOM_ID, "join")
 
         recovery = MatrixDeliveryWorker(
             store=alice,

@@ -43,6 +43,7 @@ from mindroom.message_target import MessageTarget
 from mindroom.pending_event_worker import PendingEventWorker
 from mindroom.turn_record import canonicalize_turn_record
 from tests.conftest import CrashError, DiesAfterNextWriteCommit, ignore_delivered_projection
+from tests.journal_membership_helpers import admit_room_membership
 from tests.test_live_message_coalescing import _make_bot
 
 if TYPE_CHECKING:
@@ -292,7 +293,7 @@ class TestTheHandoffIsTheDurableEnqueue:
         bot = _make_bot(tmp_path)
         await admit(journal(bot), text_event("$cause"))
         await adopt(bot, ["$cause"])
-        await journal(bot).fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(journal(bot), ROOM, "leave", source=DepartureSource.LOCAL)
         sends: list[str] = []
 
         event_id = await deliver_answer(bot, "$cause", sends=sends)
@@ -723,7 +724,7 @@ class TestAFenceRetiresWhatItMakesUnanswerable:
         await admit(journal(bot), text_event("$cause"))
         assert await pending_ids(bot) == ["$cause"]
 
-        await journal(bot).fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(journal(bot), ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert await pending_ids(bot) == []
         assert await journal(bot).load_event("$cause") is not None, "the dedup proof was deleted with the work"
@@ -745,7 +746,7 @@ class TestAFenceRetiresWhatItMakesUnanswerable:
         await admit_redaction(journal(bot), "$redaction", redacts="$cause")
         assert await pending_ids(bot) == ["$redaction"]
 
-        await journal(bot).fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(journal(bot), ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert await pending_ids(bot) == ["$redaction"]
 
@@ -754,7 +755,7 @@ class TestAFenceRetiresWhatItMakesUnanswerable:
         bot = _make_bot(tmp_path)
         await admit(journal(bot), text_event("$cause"))
         await adopt(bot, ["$cause"])
-        await journal(bot).fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(journal(bot), ROOM, "leave", source=DepartureSource.LOCAL)
         sends: list[str] = []
 
         assert await deliver_answer(bot, "$cause", sends=sends) is None

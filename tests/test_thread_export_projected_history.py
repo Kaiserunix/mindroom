@@ -32,6 +32,7 @@ from mindroom.thread_export.projected_history import (
     export_conversation_reader,
     fetch_projected_thread_history,
 )
+from tests.journal_membership_helpers import admit_room_membership
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterable
@@ -553,8 +554,8 @@ async def test_rejoining_the_room_forces_one_fresh_hydration(router: PrincipalSt
     await export(reader)
     homeserver.reset_counts()
 
-    await router.fence_departure(ROOM, source=DepartureSource.LOCAL)
-    await router.note_membership_restarted(ROOM)
+    await admit_room_membership(router, ROOM, "leave", source=DepartureSource.LOCAL)
+    await admit_room_membership(router, ROOM, "join")
     homeserver.relations[ROOT] = [
         raw("$a:example.org", "first", ts=200, thread_id=ROOT),
         raw("$b:example.org", "second", ts=300, thread_id=ROOT),

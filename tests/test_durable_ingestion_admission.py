@@ -19,7 +19,6 @@ from mindroom.event_journal import (
     AdmissionFacts,
     DeliveryProjectionPendingError,
     DeliveryStage,
-    DepartureSource,
     EventJournalStore,
     InboundEvent,
     IngestionBatchIntegrityError,
@@ -35,6 +34,7 @@ from mindroom.matrix.client_session import authenticate_to_device_event
 from mindroom.matrix.durable_ingestion import consume_one_ingestion_batch, validate_ingestion_batch
 from mindroom.matrix.journal_ingress import parse_journal_event
 from mindroom.matrix.to_device import AuthenticatedToDeviceEvent
+from tests.journal_membership_helpers import seed_legacy_room_membership
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -401,7 +401,6 @@ async def test_initial_nonjoined_producer_position_stays_fenced(
     await consume_one_ingestion_batch(Session(SyncBatch(stream, 1, (record,))), principal, account_id=ACCOUNT)
     position = await principal.membership_position(ROOM)
     assert (position.membership, position.membership_epoch) == ("leave", 0)
-    assert not await principal.rooms_owing_departure_reports()
     record = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership(membership, "join", 0, 0))
     await consume_one_ingestion_batch(Session(SyncBatch(stream, 2, (record,))), principal, account_id=ACCOUNT)
     position = await principal.membership_position(ROOM)
@@ -418,8 +417,7 @@ async def test_initial_producer_observation_adopts_existing_journal_ownership(
     store = journal_database()
     stream = uuid4()
     principal = store.principal(ACCOUNT)
-    await principal.fence_departure(ROOM, source=DepartureSource.LOCAL)
-    await principal.note_membership_restarted(ROOM)
+    await seed_legacy_room_membership(principal, ROOM, "join")
     await principal.enqueue_matrix_delivery(
         delivery_id="$old-tenure",
         stage=DeliveryStage.FINAL,
@@ -458,7 +456,7 @@ async def test_producer_membership_position_rolls_back_with_failed_admission(
     store = journal_database()
     stream = uuid4()
     principal = await principal_for(store, stream)
-    await principal.fence_departure(ROOM, source=DepartureSource.LOCAL)
+    await seed_legacy_room_membership(principal, ROOM, "leave")
     record = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership(None, "join", 0, 0))
     batch = SyncBatch(stream, 1, (record, message("$blocked")))
     snapshot = journal_store._snapshot_interactive_source
@@ -487,7 +485,7 @@ async def test_adopted_membership_rejects_a_skipped_producer_epoch(
     store = journal_database()
     stream = uuid4()
     principal = await principal_for(store, stream)
-    await principal.fence_departure(ROOM, source=DepartureSource.LOCAL)
+    await seed_legacy_room_membership(principal, ROOM, "leave")
     record = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership(None, "join", 0, 0))
     await consume_one_ingestion_batch(Session(SyncBatch(stream, 1, (record,))), principal, account_id=ACCOUNT)
     invalid = SyncRecord(RecordKind.ROOM_LIFECYCLE, ROOM, {}, membership=OwnMembership("join", "leave", 1, 2))

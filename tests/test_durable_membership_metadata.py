@@ -283,7 +283,6 @@ async def test_real_local_echoes_do_not_hide_later_departure(  # noqa: C901, PLR
         assert not await principal.pending()
         page = await principal.read_conversation(room_id=ROOM, thread_id=None, limit=10)
         assert not page.messages
-        assert not await principal.rooms_owing_departure_reports()
 
     try:
         await sync("initial", [_member("$initial", account, "join")])

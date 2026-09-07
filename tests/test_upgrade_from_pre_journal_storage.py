@@ -33,7 +33,7 @@ from mindroom.event_journal_open import (
     read_event_journal_binding,
 )
 from mindroom.handled_turns import HandledTurnLedger, legacy_responses_file_path
-from mindroom.matrix.sync_continuity import SyncContinuityStore
+from mindroom.matrix.sync_continuity import SyncContinuityRecord, SyncContinuityStore
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -223,26 +223,23 @@ async def test_the_pre_journal_handled_turns_are_imported_from_the_path_that_ver
     assert legacy_file.with_suffix(".json.imported").exists()
 
 
-def test_the_pre_journal_sync_checkpoint_is_refused_and_repaired(
+def test_the_pre_journal_continuity_restores_only_join_fences(
     pre_journal_storage: tuple[Path, RuntimePaths],
 ) -> None:
-    """The saved transport position must be dropped, not carried into the journal.
-
-    That checkpoint means "the event cache beside me holds everything up to
-    here", and the event cache is exactly what this revision deleted. Honouring
-    the token would resume past events the journal never saw and never will.
-    Refusing it costs a cold start, which is the safe direction.
-    """
+    """The old transport checkpoint has no authority over the current receive cursor."""
     storage, _runtime_paths = pre_journal_storage
     store = SyncContinuityStore(storage, AGENT)
 
-    with pytest.raises(RuntimeError, match="unsupported version"):
-        store.load()
+    assert store.load() == SyncContinuityRecord(revision=20)
 
-    repaired = store._clear_checkpoint()
+    store.update_join_fences(add={"!new:localhost"})
 
-    assert repaired.checkpoint is None
-    assert store.load().checkpoint is None
+    assert SyncContinuityStore(storage, AGENT).load() == SyncContinuityRecord(
+        revision=21,
+        pending_join_decrypt_fences=frozenset({"!new:localhost"}),
+    )
+    rewritten = json.loads((storage / "sync_continuity" / f"{AGENT}.json").read_text(encoding="utf-8"))
+    assert "checkpoint" not in rewritten
 
 
 @pytest.mark.asyncio

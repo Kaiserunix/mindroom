@@ -90,11 +90,11 @@ Subscriptions refresh after deferred joins and room configuration changes withou
 A durable store is bound to its transport; changing this setting does not convert an existing store.
 Nio owns transport cursors, crypto preparation, and persisted per-event provenance.
 Both transports distinguish initial history, live continuations, and recovered gaps; MindRoom uses the provenance Nio supplies without reclassifying it.
-This provenance remains attached across recovery, restart, and decryption independently of journal checkpoint persistence.
+This provenance remains attached across recovery, restart, and decryption independently of application turn settlement.
 `matrix/durable_ingestion.py` converts one trusted Nio batch and atomically commits its receipt, ordered membership effects, semantic events, and conversation projection in the MindRoom journal before acknowledging that batch to Nio.
 An admission failure leaves the batch unsettled for retry, and replay after a committed admission returns the original receipt without duplicating semantic work.
 Typing, presence and read receipts are excluded from durable admission.
-The development lock pins the accompanying Nio implementation to the exact revision in `tool.uv.sources` in `pyproject.toml`.
+MindRoom requires `mindroom-nio>=1,<2`, and `uv.lock` pins the published 1.0.0 release.
 Admission is fail-closed at every provenance, not only for recovery, because an event the journal never accepted is one no later process would see again.
 Silent schedules use the custom `io.mindroom.scheduled.trigger` timeline event so clients do not render the task body as a room message.
 Ingress admits that hidden event only from a managed sender, leaves it out of the visible-message projection, and classifies cold-history copies as context-only.
@@ -115,10 +115,10 @@ An event reaches an agent through durable admission, never straight from the syn
 5. `TurnController` owns the turn and the agent responds in thread.
 
 Invites are the deliberate event-journal exception because an invite has no stable Matrix event ID to key a journal row on.
-`_on_invite_before_sync_certification` stores the pending room and inviter before starting plain background handling.
+The owned ingestion callback stores the pending room and inviter before starting background handling.
 The pending record wakes unfinished work, but it does not make Matrix repeat an already-checkpointed invite and does not grant authority.
 The stored inviter is not authorization evidence: routers and agents require nio's current invite sender after fence persistence and immediately before starting the Matrix join request.
-An authoritative departure clears nio's invited-room cache entry before asynchronous departure fencing, so a cancellation observed before the join starts revokes that sender evidence.
+Nio owns invited-room cache updates, and the join path rechecks current inviter evidence immediately before its membership command.
 A restart without current invite-cache evidence may require another invitation.
 All activity after joining uses ordinary responder conversation authorization.
 See [Bot Runtime](https://docs.mindroom.chat/architecture/bot-runtime/) for the full durable dispatch boundary.

@@ -11,6 +11,7 @@ import pytest
 
 from mindroom.background_tasks import wait_for_background_tasks
 from mindroom.event_journal import AdmissionFacts, IngestionBatchAdmission, RoomMembershipPosition
+from tests.journal_membership_helpers import admit_room_membership
 from tests.test_bot_ready_hook import (
     _CONSUMER_GENERATION,
     _STREAM_ID,
@@ -45,8 +46,8 @@ async def test_owned_departure_reconciles_app_state_on_receipt_replay(
     principal = bot.journal_principal()
     await principal.load_or_create_ingestion_consumer(new_generation=_CONSUMER_GENERATION)
     await principal.bind_ingestion_stream(generation=_CONSUMER_GENERATION, stream_id=_STREAM_ID)
-    await principal.note_membership_restarted(room_id)
-    batch = IngestionBatchAdmission(_STREAM_ID, 1, (admission,))
+    await admit_room_membership(principal, room_id, "join")
+    batch = IngestionBatchAdmission(_STREAM_ID, 2, (admission,))
     facts = (await principal.admit_ingestion_batch(batch)).record_facts[0]
     if not receipt_new:
         facts = (await principal.admit_ingestion_batch(batch)).record_facts[0]
@@ -54,7 +55,6 @@ async def test_owned_departure_reconciles_app_state_on_receipt_replay(
     manager = MagicMock()
     manager.on_sync_room_membership = AsyncMock()
     bot._call_manager = manager
-    bot._local_departures_awaiting_sync.add(room_id)
     with (
         patch.object(
             bot._room_lifecycle,
@@ -64,7 +64,6 @@ async def test_owned_departure_reconciles_app_state_on_receipt_replay(
         await bot._after_ingestion_admission(admission, facts, None)
     manager.on_sync_room_membership.assert_awaited_once_with(joined_room_ids=set(), left_room_ids={room_id})
     forget.assert_called_once_with(room_id)
-    assert room_id not in bot._local_departures_awaiting_sync
 
 
 @pytest.mark.asyncio

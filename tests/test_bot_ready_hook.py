@@ -28,8 +28,10 @@ from mindroom.constants import ROUTER_AGENT_NAME, SOURCE_KIND_KEY
 from mindroom.event_journal import (
     AdmissionFacts,
     IngestionBatchAdmission,
+    IngestionBatchSequenceError,
     IngestionRecordAdmission,
     IngestionRecordDisposition,
+    RoomMembershipPosition,
 )
 from mindroom.hooks import (
     EVENT_AGENT_STARTED,
@@ -55,6 +57,7 @@ from tests.conftest import (
     runtime_paths_for,
     test_runtime_paths,
 )
+from tests.journal_membership_helpers import admit_room_membership
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1214,7 +1217,7 @@ def _departure_member_event(event_id: str, *, user_id: str, membership: str, ts:
 
 @pytest.mark.asyncio
 async def test_replayed_truncated_leave_cannot_fence_a_rejoined_membership(tmp_path: Path) -> None:
-    """The response token identifies a leave whose timeline omits its event."""
+    """A stale batch cannot invalidate a rejoin when the leave had no event."""
     bot = _agent_bot(tmp_path)
     room_id = "!departed:localhost"
     admission = _validated_reported_membership_admission(
@@ -1234,13 +1237,11 @@ async def test_replayed_truncated_leave_cannot_fence_a_rejoined_membership(tmp_p
     assert (await principal.admit_ingestion_batch(IngestionBatchAdmission(_STREAM_ID, 1, (admission,)))).record_facts[
         0
     ] == _FRESH_RECEIPT_FACTS
-    await bot.journal_principal().note_membership_restarted(room_id)
-    epoch_after_rejoin = await principal.membership_epoch(room_id)
-    assert (await principal.admit_ingestion_batch(IngestionBatchAdmission(_STREAM_ID, 1, (admission,)))).record_facts[
-        0
-    ] == _REPLAY_FACTS
+    await admit_room_membership(bot.journal_principal(), room_id, "join")
+    with pytest.raises(IngestionBatchSequenceError):
+        await principal.admit_ingestion_batch(IngestionBatchAdmission(_STREAM_ID, 1, (admission,)))
 
-    assert await principal.membership_epoch(room_id) == epoch_after_rejoin
+    assert await principal.membership_position(room_id) == RoomMembershipPosition("join", 1)
 
 
 @pytest.mark.asyncio

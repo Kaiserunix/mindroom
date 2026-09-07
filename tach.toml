@@ -2257,17 +2257,9 @@ path = "mindroom.matrix.sync_continuity"
 depends_on = [
     "mindroom.durable_write",
     "mindroom.file_locks",
-    "mindroom.matrix.sync_token_values",
 ]
 visibility = [
     "mindroom.bot",
-]
-
-[[modules]]
-path = "mindroom.matrix.sync_token_values"
-depends_on = []
-visibility = [
-    "mindroom.matrix.sync_continuity",
 ]
 
 [[modules]]

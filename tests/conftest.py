@@ -1900,10 +1900,6 @@ def make_membership_stub() -> PrincipalStore:
 def install_runtime_journal_support(bot: RuntimeBot) -> RuntimeBot:
     """Install the durable-runtime stand-ins used by lightweight bot tests.
 
-    The real generation is a fresh UUID per database, so a test that saves a
-    checkpoint and restarts would exercise the first-open mint rejecting it
-    rather than the token logic it means to test.
-
     These tests deliberately do not open an owned ingestion session. Route
     their membership work through the mocked Matrix transports while keeping
     production's durable gateway fail-closed when no session is attached.
@@ -1915,11 +1911,12 @@ def install_runtime_journal_support(bot: RuntimeBot) -> RuntimeBot:
             msg = "Matrix client is not ready for test room membership work"
             raise RuntimeError(msg)
         if target_membership == "join":
+            position = await bot.journal_principal().ingestion_membership_position(room_id)
             rooms = client.rooms
             if (
                 isinstance(rooms, Mapping)
                 and any(joined_room_id == room_id for joined_room_id in rooms)
-                and room_id not in bot._local_departures_awaiting_sync
+                and (position is None or position.membership == "join")
             ):
                 return True
             outcome = await client_room_admin_module.join_room(client, room_id)

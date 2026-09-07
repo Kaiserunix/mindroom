@@ -380,7 +380,6 @@ class AgentBot:
     _reply_membership_sync: AgentReplyMembershipSync | None
     _turn_controller: TurnController
     _room_lifecycle: BotRoomLifecycle
-    _local_departures_awaiting_sync: set[str]
     _local_membership_lock: asyncio.Lock
     _ingestion_admission_progress: asyncio.Event
     _sync_continuity_store: SyncContinuityStore
@@ -464,7 +463,6 @@ class AgentBot:
         self._deferred_overdue_task_drain_task = None
         self._call_manager: CallManager | None = None
         self._calls_reconcile_pending = False
-        self._local_departures_awaiting_sync = set()
         self._local_membership_lock = asyncio.Lock()
         self._ingestion_admission_progress = asyncio.Event()
         self._response_recovery_diagnostic_classes = set()
@@ -498,9 +496,7 @@ class AgentBot:
                     self.admission_gate,
                     self.wait_for_admission_or_shutdown,
                 ),
-                on_room_joined=self._on_room_joined,
                 on_configured_room_joined=self._post_join_room_setup,
-                on_room_left=self._fence_left_room,
             ),
         )
         self._init_runtime_components()
@@ -1228,10 +1224,6 @@ class AgentBot:
         if self._first_sync_done:
             self._maybe_start_deferred_overdue_task_drain()
 
-    async def _on_room_joined(self, room_id: str) -> None:
-        """Stop treating a room as departed once the homeserver confirms the join."""
-        self._local_departures_awaiting_sync.discard(room_id)
-
     async def _change_local_membership(
         self,
         room_id: str,
@@ -1614,7 +1606,6 @@ class AgentBot:
                 self._calls_reconcile_pending = True
         if not joined and admission.previous_membership == "join":
             self._room_lifecycle.forget_invited_room(room_id)
-        self._local_departures_awaiting_sync.discard(room_id)
 
     async def ensure_rooms(self) -> None:
         """Ensure agent is in the correct rooms based on configuration.
@@ -2008,10 +1999,6 @@ class AgentBot:
     async def leave_rooms(self) -> None:
         """Leave rooms for entity removal while the orchestrator keeps sync alive."""
         await self._room_lifecycle.leave_all_rooms(timeout_seconds=SYNC_SHUTDOWN_PREPARATION_TIMEOUT_SECONDS)
-
-    async def _fence_left_room(self, room_id: str) -> None:
-        """Remember one local leave while its source echo is still outstanding."""
-        self._local_departures_awaiting_sync.add(room_id)
 
     async def stop(
         self,

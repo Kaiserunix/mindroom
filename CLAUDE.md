@@ -231,7 +231,7 @@ Matrix sync callback
 - `tracking/` – Durable handled-turn ledger plus exact callback obligations and compact terminal tombstones
 - `credentials/` – JSON secrets synchronized from `.env`
 - `encryption_keys/` – Matrix E2E encryption keys
-- `sync_continuity/` – Crash-atomic Matrix checkpoints and pending join decrypt fences
+- `sync_continuity/` – Crash-atomic pending join/decrypt fences
 - `logs/` – Log files
 - `matrix_state.yaml` – Matrix sync state
 

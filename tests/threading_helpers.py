@@ -39,20 +39,12 @@ from tests.conftest import (
     unwrap_extracted_collaborator,
     wrap_extracted_collaborators,
 )
-from tests.sync_continuity_helpers import load_sync_checkpoint
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from mindroom.bot import AgentBot
     from mindroom.matrix.thread_history_result import ThreadHistoryResult
-
-
-def _load_sync_token_value(storage_path: Path, agent_name: str) -> str | None:
-    checkpoint = load_sync_checkpoint(storage_path, agent_name)
-    if checkpoint is None:
-        return None
-    return checkpoint.token
 
 
 def _runtime_bound_config(config: Config, runtime_root: Path) -> Config:

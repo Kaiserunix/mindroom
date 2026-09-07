@@ -42,7 +42,6 @@ from mindroom.event_journal import (
     ConversationCursor,
     DeliveryAcknowledgement,
     DeliveryStage,
-    DepartureObservation,
     DepartureSource,
     EventClass,
     EventJournalStore,
@@ -72,6 +71,7 @@ from mindroom.event_journal.sqlite_backend import SqliteBackend
 from mindroom.interactive_models import InteractivePrompt
 from mindroom.matrix_delivery import MatrixDeliveryWorker
 from tests.conftest import postgres_journal_schema_url
+from tests.journal_membership_helpers import admit_room_membership
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
@@ -2257,7 +2257,7 @@ class TestLatestVisibleEvent:
         await admit(alice, "$reply", ts=2_000, thread_id="$root")
         assert await alice.latest_visible_event_id(room_id=ROOM, thread_id="$root") == "$reply"
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert await alice.latest_visible_event_id(room_id=ROOM, thread_id="$root") is None
 
@@ -2365,7 +2365,7 @@ class TestProjectedInteractivePrompts:
             payload=content,
         )
         await alice.claim_matrix_delivery(delivery_id="$turn", stage=DeliveryStage.FINAL)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         acknowledgement = await alice.acknowledge_matrix_delivery(
             delivery_id="$turn",
@@ -2381,7 +2381,7 @@ class TestProjectedInteractivePrompts:
                 record_json=json.dumps({"response_event_id": "$answer"}),
             ),
         )
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "join")
 
         assert acknowledgement == DeliveryAcknowledgement(settled_event_id="$answer", bound=True)
         assert await bodies(alice, thread_id="$thread") == []
@@ -2402,8 +2402,8 @@ class TestProjectedInteractivePrompts:
             payload=content,
         )
         await alice.claim_matrix_delivery(delivery_id="scheduled-turn", stage=DeliveryStage.FINAL)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         acknowledgement = await alice.acknowledge_matrix_delivery(
             delivery_id="scheduled-turn",
@@ -2430,8 +2430,8 @@ class TestProjectedInteractivePrompts:
         stored = await alice.load_matrix_delivery(delivery_id="scheduled-turn", stage=DeliveryStage.FINAL)
         assert stored is not None
         await alice.claim_matrix_delivery(delivery_id="scheduled-turn", stage=DeliveryStage.FINAL)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         await admit(
             alice,
@@ -2458,8 +2458,8 @@ class TestProjectedInteractivePrompts:
         stored = await alice.load_matrix_delivery(delivery_id="scheduled-turn", stage=DeliveryStage.FINAL)
         assert stored is not None
         await alice.claim_matrix_delivery(delivery_id="scheduled-turn", stage=DeliveryStage.FINAL)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         assert (
             await alice.retire_matrix_delivery(
@@ -2545,8 +2545,8 @@ class TestProjectedInteractivePrompts:
         stored = await alice.load_matrix_delivery(delivery_id="scheduled-turn", stage=DeliveryStage.FINAL)
         assert stored is not None
         await alice.claim_matrix_delivery(delivery_id="scheduled-turn", stage=DeliveryStage.FINAL)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         await admit(
             alice,
@@ -2607,8 +2607,8 @@ class TestProjectedInteractivePrompts:
         )
         stored = await alice.claim_matrix_delivery(delivery_id="$turn", stage=DeliveryStage.FINAL)
         assert stored is not None
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         async def admit_echo() -> None:
             inbound, projected = message(
@@ -2687,8 +2687,8 @@ class TestProjectedInteractivePrompts:
             )
             is not None
         )
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         await admit(alice, "$current-turn", sender=BOB, thread_id="$thread")
         await admit(
@@ -3093,8 +3093,8 @@ class TestProjectedInteractivePrompts:
     ) -> None:
         """A stale turn cannot authorize a prompt after the room membership changes."""
         await admit(alice, "$old-turn", sender=BOB)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         await admit(
             alice,
@@ -3168,7 +3168,7 @@ class TestProjectedInteractivePrompts:
             sender="alice",
             content=interactive_prompt("Choose?", "yes", source_event_id="$turn"),
         )
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert not await alice.interactive_prompt_is_current(
             room_id=ROOM,
@@ -3330,8 +3330,8 @@ class TestProjectedInteractivePrompts:
         )
         stored = await alice.claim_matrix_delivery(delivery_id="$turn", stage=DeliveryStage.FINAL)
         assert stored is not None
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         await admit(alice, "$target", sender="alice", content=text("Current membership"))
         await admit(alice, "$new-edit", sender="alice", ts=3_000, content=edit("$target", "New edit"))
@@ -3390,8 +3390,8 @@ class TestProjectedInteractivePrompts:
         stored = await alice.claim_matrix_delivery(delivery_id="$turn", stage=DeliveryStage.FINAL)
         assert stored is not None
         replacement = cast("dict[str, object]", stored.payload["m.new_content"])
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         await admit(alice, "$target", sender="alice", content=text("Current membership"))
         await admit(alice, "$new-edit", sender="alice", ts=3_000, content=edit("$target", "New edit"))
@@ -3430,8 +3430,8 @@ class TestProjectedInteractivePrompts:
             is not None
         )
         assert await alice.claim_matrix_delivery(delivery_id="$turn", stage=DeliveryStage.FINAL) is not None
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
         epoch = await alice.membership_epoch(ROOM)
         assert await alice.install_hydrated_conversation(
             room_id=ROOM,
@@ -3484,8 +3484,8 @@ class TestProjectedInteractivePrompts:
             )
             is not None
         )
-        await refetch_store.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await refetch_store.note_membership_restarted(ROOM)
+        await admit_room_membership(refetch_store, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(refetch_store, ROOM, "join")
         await admit(refetch_store, "$target", sender="alice", content=text("Current membership"))
         await admit(refetch_store, "$new-edit", sender="alice", ts=3_000, content=edit("$target", "New edit"))
         await admit(refetch_store, "$redaction", ts=4_000, kind=EventKind.REDACTION, redacts="$new-edit")
@@ -3965,7 +3965,7 @@ class TestInteractiveQuestionConsumption:
             source_event_id="$reaction",
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         rows = await _interactive_question_rows(journal_store)
         assert [row["question_event_id"] for row in rows] == ["$other-room"]
@@ -3986,7 +3986,7 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
     ) -> None:
         """Fence first, then enqueue: the enqueue is refused."""
         await admit(alice, "$turn")
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         transaction_id = await alice.enqueue_matrix_delivery(
             delivery_id="$turn",
@@ -4028,7 +4028,7 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
         await alice.claim_semantic_consumer("$interactive", SemanticConsumer.INTERACTIVE_REACTION)
         await alice.claim_semantic_consumer("$hook", SemanticConsumer.REACTION_HOOKS)
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert [event.event_id for event in await alice.pending()] == ["$hook"]
 
@@ -4038,7 +4038,7 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
     ) -> None:
         """A departure that wins the race prevents a later model-backed claim."""
         await admit(alice, "$interactive", kind=EventKind.REACTION)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         claimed = await alice.claim_semantic_consumer(
             "$interactive",
@@ -4065,7 +4065,7 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
             is not None
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         retired = await alice.load_matrix_delivery(delivery_id="$turn", stage=DeliveryStage.FINAL)
         assert retired is not None
@@ -4093,7 +4093,7 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
         )
         await alice.claim_matrix_delivery(delivery_id="$turn", stage=DeliveryStage.FINAL)
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         retried = await alice.enqueue_matrix_delivery(
             delivery_id="$turn",
@@ -4111,7 +4111,7 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
 
     async def test_source_less_delivery_waits_for_an_active_membership(self, alice: PrincipalStore) -> None:
         """A schedule may deliver after rejoin, but not while no membership owns it."""
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         while_departed = await alice.enqueue_matrix_delivery(
             delivery_id="scheduled-task-7",
@@ -4120,7 +4120,7 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
             thread_id=None,
             payload=text("reminder"),
         )
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "join")
         after_rejoin = await alice.enqueue_matrix_delivery(
             delivery_id="scheduled-task-7",
             stage=DeliveryStage.FINAL,
@@ -4145,8 +4145,8 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
             is not None
         )
         await alice.claim_matrix_delivery(delivery_id="scheduled-task-7", stage=DeliveryStage.INITIAL)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         final = await alice.enqueue_matrix_delivery(
             delivery_id="scheduled-task-7",
@@ -4189,8 +4189,8 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
         assert await alice.turn_membership_is_current(turn_id="scheduled-stream", room_id=ROOM)
 
         await alice.claim_matrix_delivery(delivery_id="scheduled-stream", stage=DeliveryStage.INITIAL)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         assert not await alice.turn_membership_is_current(turn_id="scheduled-stream", room_id=ROOM)
 
@@ -4207,8 +4207,8 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
             payload=text("Thinking..."),
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
 
         initial = await alice.load_matrix_delivery(delivery_id="scheduled-stream", stage=DeliveryStage.INITIAL)
         assert initial is not None
@@ -4231,7 +4231,7 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
 
         assert await alice.turn_membership_is_current(turn_id="$turn", room_id=ROOM)
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert not await alice.turn_membership_is_current(turn_id="$turn", room_id=ROOM)
 
@@ -4239,7 +4239,7 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
         """Leaving one room says nothing about a turn running in a different one."""
         await admit(alice, "$turn")
 
-        await alice.fence_departure(OTHER_ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, OTHER_ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert await alice.turn_membership_is_current(turn_id="$turn", room_id=ROOM)
         assert (
@@ -4254,55 +4254,18 @@ class TestDeliveryIsScopedToTheMembershipThatAuthorizedIt:
         )
 
 
-class TestDepartureBookkeeping:
-    """One departure invalidates a room once, whichever observer sees it first."""
+class TestReportedDeparture:
+    """A reported departure invalidates application work from its ended tenure."""
 
-    async def test_a_consumed_report_leaves_the_new_projection_alone(self, alice: PrincipalStore) -> None:
-        """Absorbing a report must not delete what the membership after it built."""
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
-        await admit(alice, "$fresh", ts=5_000)
-
-        await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
-
-        page = await alice.read_conversation(room_id=ROOM, thread_id=None, limit=5)
-        assert [m.logical_event_id for m in page.messages] == ["$fresh"]
-
-    async def test_a_departure_with_no_report_owed_invalidates(self, alice: PrincipalStore) -> None:
+    async def test_a_reported_departure_invalidates(self, alice: PrincipalStore) -> None:
         """A departure the bot never initiated drops what the old membership built."""
         await admit(alice, "$stale", ts=5_000)
 
-        outcome = await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        outcome = await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.REPORTED)
 
-        assert outcome.observation is DepartureObservation.FENCED
+        assert outcome == 1
         page = await alice.read_conversation(room_id=ROOM, thread_id=None, limit=5)
         assert page.messages == ()
-
-    async def test_owed_reports_are_scoped_to_one_principal(self, journal_store: EventJournalStore) -> None:
-        """One bot's owed report must not absorb another bot's departure."""
-        alice = journal_store.principal("agent@alice")
-        bob = journal_store.principal("agent@bob")
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-
-        assert await bob.rooms_owing_departure_reports() == frozenset()
-        outcome = await bob.fence_departure(ROOM, source=DepartureSource.REPORTED)
-        assert outcome.observation is DepartureObservation.FENCED
-
-    async def test_retiring_one_room_leaves_another_rooms_report_owed(self, alice: PrincipalStore) -> None:
-        """Giving up on one room's report says nothing about any other room."""
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.fence_departure(OTHER_ROOM, source=DepartureSource.LOCAL)
-
-        await alice.retire_owed_departure_reports(ROOM)
-
-        assert await alice.rooms_owing_departure_reports() == frozenset({OTHER_ROOM})
-        # The retired room's report is no longer absorbed. It is recognised as
-        # the departure this room is already fenced for, which is a different
-        # answer from "a report was owed and this was it".
-        retired = await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
-        still_owed = await alice.fence_departure(OTHER_ROOM, source=DepartureSource.REPORTED)
-        assert retired.observation is DepartureObservation.ALREADY_FENCED
-        assert still_owed.observation is DepartureObservation.OWED_REPORT_CONSUMED
 
 
 class TestByteOrderPinning:
@@ -4343,6 +4306,86 @@ class TestByteOrderPinning:
 class TestMembershipEpoch:
     """Leaving and rejoining invalidates what the previous membership saw."""
 
+    @pytest.mark.parametrize("legacy_echo_state", [False, True])
+    async def test_batch_membership_preserves_tenure_without_echo_bookkeeping(
+        self,
+        journal_database: Callable[[], EventJournalStore],
+        legacy_echo_state: bool,
+    ) -> None:
+        """Fresh and upgraded schemas retain delivery fencing under nio-owned membership."""
+        store = journal_database()
+
+        def install_membership(transaction: Transaction) -> None:
+            transaction.execute("DROP TABLE room_membership")
+            transaction.execute("DROP TABLE IF EXISTS reported_departures")
+            transaction.execute(
+                """
+                CREATE TABLE room_membership (
+                    principal_id TEXT NOT NULL, room_id TEXT NOT NULL,
+                    membership_epoch BIGINT NOT NULL,
+                    departure_fenced INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (principal_id, room_id)
+                )
+                """,
+            )
+            if legacy_echo_state:
+                transaction.execute(
+                    "ALTER TABLE room_membership ADD COLUMN owed_departure_reports BIGINT NOT NULL DEFAULT 0",
+                )
+                transaction.execute(
+                    """
+                    CREATE TABLE reported_departures (
+                        report_order BIGINT PRIMARY KEY, principal_id TEXT NOT NULL,
+                        observation_id TEXT NOT NULL, room_id TEXT NOT NULL,
+                        journal_order BIGINT NOT NULL, run_epoch BIGINT NOT NULL,
+                        run_closed INTEGER NOT NULL DEFAULT 0,
+                        UNIQUE (principal_id, observation_id)
+                    )
+                    """,
+                )
+                transaction.execute(
+                    "INSERT INTO reported_departures VALUES (1, ?, '$old-leave', ?, 1, 7, 0)",
+                    ("agent@alice", ROOM),
+                )
+            transaction.execute(
+                "INSERT INTO room_membership (principal_id, room_id, membership_epoch, departure_fenced) "
+                "VALUES (?, ?, 7, 1)",
+                ("agent@alice", ROOM),
+            )
+            if legacy_echo_state:
+                transaction.execute("UPDATE room_membership SET owed_departure_reports = 3")
+
+        await store.backend.write(install_membership)
+        await store.close()
+        reopened = journal_database()
+        alice = reopened.principal("agent@alice")
+        assert await alice.ingestion_membership_position(ROOM) is None
+        assert await admit_room_membership(alice, ROOM, "join") == 7
+        await admit(alice, "$fresh")
+        assert (
+            await alice.enqueue_matrix_delivery(
+                delivery_id="fresh-notice",
+                stage=DeliveryStage.FINAL,
+                event_type="m.room.message",
+                room_id=ROOM,
+                thread_id=None,
+                payload=text("notice"),
+            )
+            is not None
+        )
+
+        assert await admit_room_membership(alice, ROOM, "leave") == 8
+        assert await bodies(alice) == []
+        assert await alice.pending() == ()
+        retired = await alice.load_matrix_delivery(delivery_id="fresh-notice", stage=DeliveryStage.FINAL)
+        assert retired is not None
+        assert retired.retired
+        assert retired.membership_epoch == 7
+        assert await admit_room_membership(alice, ROOM, "join") == 8
+        producer = await alice.ingestion_membership_position(ROOM)
+        assert producer is not None
+        assert producer.membership_epoch == 1
+
     async def test_membership_position_exposes_current_journal_tenure(
         self,
         alice: PrincipalStore,
@@ -4351,107 +4394,13 @@ class TestMembershipEpoch:
         absent = await alice.membership_position(ROOM)
         assert (absent.membership, absent.membership_epoch) == ("leave", 0)
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
         departed = await alice.membership_position(ROOM)
         assert (departed.membership, departed.membership_epoch) == ("leave", 1)
 
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "join")
         joined = await alice.membership_position(ROOM)
         assert (joined.membership, joined.membership_epoch) == ("join", 1)
-
-    async def test_a_join_closes_only_its_preceding_reported_departure(
-        self,
-        alice: PrincipalStore,
-    ) -> None:
-        """Replaying an old join cannot clear a later departure fence."""
-        departure = replace(
-            message("$leave")[0],
-            kind=EventKind.ROOM_LIFECYCLE,
-            event_class=EventClass.CONTEXT_ONLY,
-        )
-        await alice.admit(departure, None)
-        await alice.fence_departure(
-            ROOM,
-            source=DepartureSource.REPORTED,
-            report_observation_id=departure.event_id,
-        )
-        join = replace(
-            message("$join")[0],
-            kind=EventKind.ROOM_LIFECYCLE,
-            event_class=EventClass.CONTEXT_ONLY,
-        )
-        await alice.admit(join, None)
-        await alice.close_preceding_reported_departure(
-            ROOM,
-            join.event_id,
-        )
-        assert await _membership_accepts_question(alice, 1)
-
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.close_preceding_reported_departure(
-            ROOM,
-            join.event_id,
-        )
-
-        assert not await _membership_accepts_question(alice, 2)
-
-    async def test_an_old_join_cannot_rearm_a_newer_local_departure(
-        self,
-        alice: PrincipalStore,
-    ) -> None:
-        """Delayed reports retain the leave/join pairing from their timeline order."""
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        for event_id in ("$leave-1", "$join-1", "$leave-2"):
-            event = replace(
-                message(event_id)[0],
-                kind=EventKind.ROOM_LIFECYCLE,
-                event_class=EventClass.CONTEXT_ONLY,
-            )
-            await alice.admit(event, None)
-            if event_id.startswith("$leave"):
-                await alice.fence_departure(
-                    ROOM,
-                    source=DepartureSource.REPORTED,
-                    report_observation_id=event_id,
-                )
-            else:
-                await alice.close_preceding_reported_departure(ROOM, event_id)
-
-        await alice.fence_departure(
-            ROOM,
-            source=DepartureSource.REPORTED,
-            report_observation_id="$leave-1",
-        )
-        await alice.fence_departure(
-            ROOM,
-            source=DepartureSource.REPORTED,
-            report_observation_id="$leave-2",
-        )
-
-        assert not await _membership_accepts_question(alice, 2)
-
-    async def test_a_join_closes_a_preceding_truncated_departure_report(
-        self,
-        alice: PrincipalStore,
-    ) -> None:
-        """Synthetic sync-token observations participate in journal ordering."""
-        await alice.fence_departure(
-            ROOM,
-            source=DepartureSource.REPORTED,
-            report_observation_id="classic:s-left:!room:example.org",
-        )
-        join = replace(
-            message("$join-after-truncated-leave")[0],
-            kind=EventKind.ROOM_LIFECYCLE,
-            event_class=EventClass.CONTEXT_ONLY,
-        )
-        await alice.admit(join, None)
-
-        await alice.close_preceding_reported_departure(ROOM, join.event_id)
-
-        assert await _membership_accepts_question(alice, 1)
 
     async def test_hydration_is_recorded_per_membership(self, alice: PrincipalStore) -> None:
         """Hydration is recorded per membership."""
@@ -4479,7 +4428,7 @@ class TestMembershipEpoch:
             expected_membership_epoch=epoch,
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert not await alice.conversation_is_hydrated(room_id=ROOM, thread_id=None)
 
@@ -4503,8 +4452,8 @@ class TestMembershipEpoch:
             expected_membership_epoch=await alice.membership_epoch(ROOM),
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await alice.note_membership_restarted(ROOM)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "join")
         await alice.install_hydrated_conversation(
             room_id=ROOM,
             thread_id=None,
@@ -4533,7 +4482,7 @@ class TestMembershipEpoch:
             payload=text("answer"),
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert await alice.unacknowledged_matrix_deliveries() == ()
         retired = await alice.load_matrix_delivery(delivery_id="turn-1", stage=DeliveryStage.FINAL)
@@ -4559,7 +4508,7 @@ class TestMembershipEpoch:
         )
         await alice.claim_matrix_delivery(delivery_id="turn-1", stage=DeliveryStage.FINAL)
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         kept = await alice.load_matrix_delivery(delivery_id="turn-1", stage=DeliveryStage.FINAL)
         assert kept is not None
@@ -4587,7 +4536,7 @@ class TestMembershipEpoch:
             delivered_projections=(),
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         stored = await alice.load_matrix_delivery(delivery_id="turn-1", stage=DeliveryStage.FINAL)
         assert stored is not None
@@ -4641,7 +4590,7 @@ class TestMembershipEpoch:
         )
         assert await bodies(alice) == ["$before"]
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert await bodies(alice) == []
 
@@ -4654,7 +4603,7 @@ class TestMembershipEpoch:
         await alice.admit(admission, projected)
         await alice.settle("$answered")
 
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         assert await alice.load_event("$answered") is not None
         assert await alice.admit(*message("$answered")) is AdmissionResult.DUPLICATE
@@ -4662,7 +4611,7 @@ class TestMembershipEpoch:
     async def test_hydration_racing_a_rejoin_installs_nothing(self, alice: PrincipalStore) -> None:
         """A partly applied hydration would look complete to the next reader."""
         stale_epoch = await alice.membership_epoch(ROOM)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         installed = await alice.install_hydrated_conversation(
             room_id=ROOM,
@@ -4822,7 +4771,7 @@ class TestBoundedHydrationInstallation:
         recovery = await alice.record_room_history_recovery(ROOM)
         assert recovery is not None
         stale_epoch = await alice.membership_epoch(ROOM)
-        await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
         observed = _ObservedHydrationBackend(journal_store.backend)
         recovering = EventJournalStore(backend=observed).principal("agent@alice")
 
@@ -5025,7 +4974,7 @@ class TestBoundedHydrationInstallation:
 
         async def fence_after_first_write(write_number: int) -> None:
             if write_number == 1:
-                await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
+                await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
 
         observed = _ObservedHydrationBackend(journal_store.backend, after_write=fence_after_first_write)
         hydrating = EventJournalStore(backend=observed).principal("agent@alice")
@@ -5057,8 +5006,8 @@ class TestBoundedHydrationInstallation:
         async def fence_and_record_new_recovery(write_number: int) -> None:
             nonlocal newer_recovery
             if write_number == 1:
-                await alice.fence_departure(ROOM, source=DepartureSource.LOCAL)
-                await alice.note_membership_restarted(ROOM)
+                await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.LOCAL)
+                await admit_room_membership(alice, ROOM, "join")
                 await admit(alice, "$new-anchor", ts=10_000)
                 newer_recovery = await alice.record_room_history_recovery(ROOM)
 
@@ -5337,6 +5286,7 @@ class TestInteractiveActivationAndDepartureAreCrossProcessOrdered:
         principal_id = "agent@alice"
         first = rival_stores.first.principal(principal_id)
         second = rival_stores.second.principal(principal_id)
+        await admit_room_membership(first, ROOM, "join")
         await admit(first, "$turn")
         registration_claimed = threading.Event()
         release_registration = threading.Event()
@@ -5363,7 +5313,9 @@ class TestInteractiveActivationAndDepartureAreCrossProcessOrdered:
             await asyncio.to_thread(registration_claimed.wait, _WORKER_WAIT_SECONDS)
             assert registration_claimed.is_set(), "the registration never claimed the membership row"
 
-            departure = asyncio.create_task(second.fence_departure(ROOM, source=DepartureSource.REPORTED))
+            departure = asyncio.create_task(
+                admit_room_membership(second, ROOM, "leave", source=DepartureSource.REPORTED),
+            )
             await _await_queued_racers(
                 rival_stores.database_url,
                 application_name=rival_stores.racer_application_name,
@@ -5420,11 +5372,12 @@ class TestAFenceCannotBeSteppedOverByAConcurrentWalk:
         with no lock between them, which is exactly what two stores are. The
         window is opened by pausing the walk after its first statement -- the
         real transaction, the real SQL, only held open -- and the fence is a
-        real `fence_departure` on the second store.
+        real membership batch admission on the second store.
         """
         principal_id = "agent@alice"
         reader = rival_stores.first.principal(principal_id)
         fencing = rival_stores.second.principal(principal_id)
+        await admit_room_membership(reader, ROOM, "join")
         inside_the_walk = threading.Event()
         fence_finished = threading.Event()
 
@@ -5452,13 +5405,13 @@ class TestAFenceCannotBeSteppedOverByAConcurrentWalk:
         )
         await asyncio.to_thread(inside_the_walk.wait, _WORKER_WAIT_SECONDS)
         assert inside_the_walk.is_set(), "the walk never reached its epoch decision"
-        fence = asyncio.create_task(fencing.fence_departure(ROOM, source=DepartureSource.REPORTED))
+        fence = asyncio.create_task(admit_room_membership(fencing, ROOM, "leave", source=DepartureSource.REPORTED))
         fence.add_done_callback(lambda _: fence_finished.set())
         installed, outcome = await asyncio.gather(walk, fence)
 
         assert not installed, "the final publication trusted the epoch the fence superseded"
-        assert outcome.observation is DepartureObservation.FENCED
-        assert outcome.membership_epoch == epoch + 1
+        assert outcome == 1
+        assert outcome == epoch + 1
         assert await bodies(reader) == [], "the walk's messages survived the departure that was supposed to erase them"
         assert not await reader.conversation_is_hydrated(room_id=ROOM, thread_id=None)
 
@@ -6769,7 +6722,7 @@ class TestApprovalContinuations:
         await responder.create_approval_continuation(
             replace(self.continuation(state="waiting"), runtime_generation="runtime-a"),
         )
-        await router.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(router, ROOM, "leave", source=DepartureSource.REPORTED)
 
         reserved = await router.reserve_approval_card_deliveries(
             continuation_principal_id="agent@alice",
@@ -6967,6 +6920,7 @@ class TestApprovalContinuations:
         """A click and responder departure lock continuation before card delivery."""
         responder = rival_stores.first.principal("agent@alice")
         router = rival_stores.first.principal("router@shared")
+        await admit_room_membership(responder, ROOM, "join")
         await self.admit_sources(responder)
         await responder.create_approval_continuation(
             replace(self.continuation(state="waiting"), runtime_generation="runtime-a"),
@@ -7001,8 +6955,10 @@ class TestApprovalContinuations:
             await asyncio.to_thread(continuation_locked.wait, _WORKER_WAIT_SECONDS)
             assert continuation_locked.is_set(), "the decision never locked its continuation"
             departure = asyncio.create_task(
-                rival_stores.second.principal("agent@alice").fence_departure(
+                admit_room_membership(
+                    rival_stores.second.principal("agent@alice"),
                     ROOM,
+                    "leave",
                     source=DepartureSource.REPORTED,
                 ),
             )
@@ -7021,7 +6977,7 @@ class TestApprovalContinuations:
         assert recorded.recorded
         assert recorded.resolution is not None
         assert recorded.resolution["status"] == "approved"
-        assert departed.observation is DepartureObservation.FENCED
+        assert departed == 1
         assert await responder.approval_continuation("approval-1") is None
         terminal = await router.load_matrix_delivery(
             delivery_id="approval-card-1",
@@ -7450,6 +7406,7 @@ class TestApprovalContinuations:
     ) -> None:
         """Terminal completion locks its continuation before settling sources."""
         responder = rival_stores.first.principal("agent@alice")
+        await admit_room_membership(responder, ROOM, "join")
         await self.admit_sources(responder)
         await responder.create_approval_continuation(self.continuation())
         await responder.claim_approval_continuation("approval-1", runtime_generation="runtime-a")
@@ -7487,8 +7444,10 @@ class TestApprovalContinuations:
             await asyncio.to_thread(source_settled.wait, _WORKER_WAIT_SECONDS)
             assert source_settled.is_set(), "completion never settled its first source"
             departure = asyncio.create_task(
-                rival_stores.second.principal("agent@alice").fence_departure(
+                admit_room_membership(
+                    rival_stores.second.principal("agent@alice"),
                     ROOM,
+                    "leave",
                     source=DepartureSource.REPORTED,
                 ),
             )
@@ -7505,7 +7464,7 @@ class TestApprovalContinuations:
         completed, departed = await asyncio.gather(finish, departure)
 
         assert completed
-        assert departed.observation is DepartureObservation.FENCED
+        assert departed == 1
         assert await responder.approval_continuation("approval-1") is None
         assert not await responder.is_pending("$source-1")
         assert not await responder.is_pending("$source-2")
@@ -7577,6 +7536,7 @@ class TestApprovalContinuations:
         """Cross-principal cleanup cannot deadlock router departure."""
         responder = rival_stores.first.principal("agent@alice")
         router = rival_stores.first.principal("router@alice")
+        await admit_room_membership(router, ROOM, "join")
         await self.admit_sources(responder)
         await responder.create_approval_continuation(
             replace(self.continuation(state="waiting"), runtime_generation="runtime-a"),
@@ -7621,7 +7581,7 @@ class TestApprovalContinuations:
                 statement_matches=lambda sql: "INSERT INTO room_membership" in sql,
             ),
         ).principal("router@alice")
-        departure = asyncio.create_task(departing.fence_departure(ROOM, source=DepartureSource.LOCAL))
+        departure = asyncio.create_task(admit_room_membership(departing, ROOM, "leave", source=DepartureSource.LOCAL))
         try:
             await asyncio.to_thread(membership_locked.wait, _WORKER_WAIT_SECONDS)
             assert membership_locked.is_set(), "departure never locked router membership"
@@ -7643,7 +7603,7 @@ class TestApprovalContinuations:
 
         departed, discarded = await asyncio.gather(departure, cleanup)
 
-        assert departed.observation is DepartureObservation.FENCED
+        assert departed == 1
         assert not discarded
 
     async def test_stale_unavailable_notice_cannot_discard_sources(
@@ -7682,8 +7642,8 @@ class TestApprovalContinuations:
             )
             is not None
         )
-        await router.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await router.note_membership_restarted(ROOM)
+        await admit_room_membership(router, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(router, ROOM, "join")
         await router.acknowledge_matrix_delivery(
             delivery_id=delivery_id,
             stage=DeliveryStage.FINAL,
@@ -7735,8 +7695,8 @@ class TestApprovalContinuations:
             is not None
         )
 
-        await router.fence_departure(ROOM, source=DepartureSource.LOCAL)
-        await router.note_membership_restarted(ROOM)
+        await admit_room_membership(router, ROOM, "leave", source=DepartureSource.LOCAL)
+        await admit_room_membership(router, ROOM, "join")
         await router.acknowledge_matrix_delivery(
             delivery_id=stale_delivery_id,
             stage=DeliveryStage.FINAL,
@@ -7849,7 +7809,7 @@ class TestApprovalContinuations:
         )
         await self.remember_card(alice)
 
-        await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.REPORTED)
 
         assert await alice.approval_continuation("approval-1") is None
         assert not await alice.is_pending("$source-1")
@@ -7869,7 +7829,7 @@ class TestApprovalContinuations:
         )
         await self.remember_card(router)
 
-        await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.REPORTED)
 
         assert await alice.approval_continuation("approval-1") is None
         stored = await router.pending_approval_card(room_id=ROOM, card_event_id="$approval")
@@ -7907,7 +7867,7 @@ class TestApprovalContinuations:
             delivered_projections=(),
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.REPORTED)
 
         assert await alice.approval_continuation("approval-1") is None
         assert await router.pending_approval_cards(room_id=ROOM) == ()
@@ -7944,7 +7904,7 @@ class TestApprovalContinuations:
             ),
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.REPORTED)
 
         assert await alice.approval_continuation("approval-1") is None
         assert await router.pending_approval_cards(room_id=ROOM) == ()
@@ -8002,7 +7962,7 @@ class TestApprovalContinuations:
             payload={"status": "expired"},
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.REPORTED)
 
         assert await alice.approval_continuation("approval-1") is None
         assert await router.pending_approval_cards(room_id=ROOM) == ()
@@ -8067,7 +8027,7 @@ class TestApprovalContinuations:
             reason="matrix event exceeds the hard size limit",
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.REPORTED)
 
         terminal = await router.load_matrix_delivery(
             delivery_id="approval-card-1",
@@ -8116,7 +8076,7 @@ class TestApprovalContinuations:
         )
         await self.remember_card(router)
 
-        await router.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(router, ROOM, "leave", source=DepartureSource.REPORTED)
 
         continuation = await alice.approval_continuation("approval-1")
         assert continuation is not None
@@ -8170,7 +8130,7 @@ class TestApprovalContinuations:
             delivered_projections=(),
         )
 
-        await alice.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(alice, ROOM, "leave", source=DepartureSource.REPORTED)
 
         assert await alice.pending_approval_cards(room_id=ROOM) == ()
         assert await alice.is_terminal_approval_card(room_id=ROOM, card_event_id="$approval") is True
@@ -8200,8 +8160,8 @@ class TestApprovalContinuations:
             sending_device_id="OLD-DEVICE",
         )
 
-        await router.fence_departure(ROOM, source=DepartureSource.REPORTED)
-        await router.note_membership_restarted(ROOM)
+        await admit_room_membership(router, ROOM, "leave", source=DepartureSource.REPORTED)
+        await admit_room_membership(router, ROOM, "join")
 
         sent: list[MatrixDelivery] = []
         resolved: list[MatrixDelivery] = []
@@ -8279,7 +8239,7 @@ class TestApprovalContinuations:
             ),
         )
 
-        await router.fence_departure(ROOM, source=DepartureSource.REPORTED)
+        await admit_room_membership(router, ROOM, "leave", source=DepartureSource.REPORTED)
 
         continuation = await alice.approval_continuation("approval-1")
         assert continuation is not None
