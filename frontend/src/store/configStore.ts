@@ -15,9 +15,10 @@ import {
   RoomDefaultsConfig,
 } from "@/types/config";
 import * as configService from "@/services/configService";
-import type {
-  ConfigDiagnostic,
-  ConfigValidationIssue,
+import {
+  isConfigConflictDiagnostic,
+  type ConfigDiagnostic,
+  type ConfigValidationIssue,
 } from "@/lib/configValidation";
 import {
   cloneToolEntries,
@@ -104,17 +105,15 @@ function retainedDraftDiagnostics(
     );
   });
 
-  if (diagnosticsContainValidationErrors(filteredDiagnostics)) {
-    return filteredDiagnostics.filter(
-      (diagnostic) =>
-        diagnostic.kind === "validation" ||
-        (diagnostic.kind === "global" &&
-          diagnostic.message === CONFIG_VALIDATION_FAILED_MESSAGE),
-    );
-  }
-
+  const hasValidationErrors =
+    diagnosticsContainValidationErrors(filteredDiagnostics);
   return filteredDiagnostics.filter(
-    (diagnostic) => diagnostic.kind === "validation",
+    (diagnostic) =>
+      diagnostic.kind === "validation" ||
+      isConfigConflictDiagnostic(diagnostic) ||
+      (hasValidationErrors &&
+        diagnostic.kind === "global" &&
+        diagnostic.message === CONFIG_VALIDATION_FAILED_MESSAGE),
   );
 }
 
@@ -162,11 +161,14 @@ function configConflictDiagnostics(
   blocking: boolean,
 ): ConfigDiagnostic[] {
   return [
-    ...globalDiagnostics(CONFIG_CONFLICT_MESSAGE, blocking),
+    {
+      kind: "global",
+      code: "config_conflict",
+      message: CONFIG_CONFLICT_MESSAGE,
+      blocking,
+    },
     ...retainedDraftDiagnostics(diagnostics).filter(
-      (diagnostic) =>
-        diagnostic.kind !== "global" ||
-        diagnostic.message !== CONFIG_CONFLICT_MESSAGE,
+      (diagnostic) => !isConfigConflictDiagnostic(diagnostic),
     ),
   ];
 }
@@ -729,7 +731,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       isLoading: true,
       diagnostics: currentState.isDirty
         ? retainedDraftDiagnostics(currentState.diagnostics)
-        : [],
+        : currentState.diagnostics.filter(isConfigConflictDiagnostic),
       loadConfigRequestId,
     });
     try {
@@ -839,12 +841,15 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
           return;
         }
         if (recoveryConfigSourceError != null) {
-          const recoveryDiagnostics = globalDiagnostics(
-            recoveryConfigSourceError instanceof Error
-              ? recoveryConfigSourceError.message
-              : "Failed to load raw configuration",
-            true,
-          );
+          const recoveryDiagnostics = [
+            ...latestState.diagnostics.filter(isConfigConflictDiagnostic),
+            ...globalDiagnostics(
+              recoveryConfigSourceError instanceof Error
+                ? recoveryConfigSourceError.message
+                : "Failed to load raw configuration",
+              true,
+            ),
+          ];
           if (
             latestState.isDirty ||
             latestState.draftVersion != draftVersionAtStart
@@ -873,11 +878,14 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
           set({
             isLoading: false,
             syncStatus: "error",
-            diagnostics: validationDiagnostics(error.issues, {
-              blocking:
-                latestState.recoveryConfigSource != null &&
-                latestState.config == null,
-            }),
+            diagnostics: [
+              ...latestState.diagnostics.filter(isConfigConflictDiagnostic),
+              ...validationDiagnostics(error.issues, {
+                blocking:
+                  latestState.recoveryConfigSource != null &&
+                  latestState.config == null,
+              }),
+            ],
           });
           return;
         }
@@ -895,6 +903,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       }
       set({
         diagnostics: [
+          ...get().diagnostics.filter(isConfigConflictDiagnostic),
           {
             kind: "global",
             message:
@@ -961,6 +970,10 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       diagnostics,
       dirtyRoots,
     } = get();
+    const conflict = diagnostics.find(isConfigConflictDiagnostic);
+    if (conflict) {
+      return { status: "error", message: conflict.message, diagnostics };
+    }
     if (!config) {
       return {
         status: "error",
@@ -1263,6 +1276,10 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       draftVersion,
       committedGeneration,
     } = get();
+    const conflict = diagnostics.find(isConfigConflictDiagnostic);
+    if (conflict) {
+      return { status: "error", message: conflict.message, diagnostics };
+    }
     if (recoveryConfigSource == null) {
       return {
         status: "error",

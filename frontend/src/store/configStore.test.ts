@@ -135,6 +135,7 @@ describe("configStore", () => {
             diagnostics: [
               {
                 kind: "global",
+                code: "config_conflict",
                 message: conflictMessage,
                 blocking: mode === "raw",
               },
@@ -165,7 +166,7 @@ describe("configStore", () => {
         },
       );
 
-      it("keeps draft validation diagnostics without duplicating the conflict on retry", async () => {
+      it("rejects retries locally while retaining conflict and validation diagnostics", async () => {
         const validationDiagnostic = {
           kind: "validation" as const,
           issue: {
@@ -183,14 +184,59 @@ describe("configStore", () => {
         );
 
         await save();
-        await save();
+        edit();
+        expect((await save()).status).toBe("error");
 
         expect(useConfigStore.getState().diagnostics).toEqual([
-          { kind: "global", message: conflictMessage, blocking: mode === "raw" },
+          {
+            kind: "global",
+            code: "config_conflict",
+            message: conflictMessage,
+            blocking: mode === "raw",
+          },
           validationDiagnostic,
         ]);
         expect(useConfigStore.getState().committedGeneration).toBe(7);
-        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+
+      it("keeps conflict guidance after editing without validation errors", async () => {
+        vi.mocked(fetch).mockResolvedValueOnce(
+          new Response("{}", { status: 409 }),
+        );
+        await save();
+        edit();
+
+        expect(useConfigStore.getState().diagnostics).toEqual([
+          {
+            kind: "global",
+            code: "config_conflict",
+            message: conflictMessage,
+            blocking: mode === "raw",
+          },
+        ]);
+        expect(useConfigStore.getState().committedGeneration).toBe(7);
+      });
+
+      it("keeps conflict guidance when a reload fails", async () => {
+        vi.mocked(fetch).mockResolvedValueOnce(
+          new Response("{}", { status: 409 }),
+        );
+        await save();
+        vi.mocked(fetch).mockRejectedValueOnce(
+          new Error("Network unavailable"),
+        );
+        await useConfigStore.getState().loadConfig();
+
+        expect(useConfigStore.getState().diagnostics).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              code: "config_conflict",
+              message: conflictMessage,
+            }),
+          ]),
+        );
+        expect(useConfigStore.getState().committedGeneration).toBe(7);
       });
 
       it("ignores a conflict from a save superseded by a newer request", async () => {
@@ -215,6 +261,63 @@ describe("configStore", () => {
       });
     },
   );
+
+  it("keeps a raw conflict after undoing edits and failing to reload", async () => {
+    useConfigStore.setState({
+      recoveryConfigSource: "agents: {}\n# draft\n",
+      recoveryConfigSourceOriginal: "agents: {}\n",
+      committedGeneration: 7,
+      isDirty: true,
+    });
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("{}", { status: 409 }));
+    await useConfigStore.getState().saveRecoveryConfigSource();
+    useConfigStore.getState().updateRecoveryConfigSource("agents: {}\n");
+    expect(useConfigStore.getState().isDirty).toBe(false);
+    vi.mocked(fetch).mockRejectedValueOnce(new Error("Network unavailable"));
+    await useConfigStore.getState().loadConfig();
+    expect(useConfigStore.getState().diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "config_conflict" }),
+      ]),
+    );
+    useConfigStore
+      .getState()
+      .updateRecoveryConfigSource("agents: {}\n# retry\n");
+    expect(
+      (await useConfigStore.getState().saveRecoveryConfigSource()).status,
+    ).toBe("error");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains conflict guidance when an outstanding policy refresh finishes", async () => {
+    const config: Config = {
+      agents: {},
+      models: { default: { provider: "test", id: "draft" } },
+      memory: {
+        embedder: { provider: "test", config: { model: "test-embedder" } },
+      },
+      defaults: { markdown: true },
+      router: { model: "default" },
+    };
+    useConfigStore.setState({
+      config,
+      loadedConfig: config,
+      committedGeneration: 7,
+      isDirty: true,
+    });
+    const policies = deferred<Response>();
+    vi.mocked(fetch).mockReturnValueOnce(policies.promise);
+    const refresh = useConfigStore.getState().refreshAgentPolicies([]);
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("{}", { status: 409 }));
+    await useConfigStore.getState().saveConfig();
+    policies.resolve(new Response(JSON.stringify({ agent_policies: {} })));
+    await refresh;
+
+    expect(useConfigStore.getState().diagnostics).toEqual([
+      expect.objectContaining({ code: "config_conflict" }),
+    ]);
+    expect(useConfigStore.getState().committedGeneration).toBe(7);
+  });
 
   describe("loadConfig", () => {
     it("should load configuration successfully", async () => {
